@@ -1,0 +1,26 @@
+[
+    {
+        "symbol": "TSLA",
+        "unique_tag": "1",
+        "start_price": 343,
+        "cost_per_grid": 500,
+        "grid_price_type": "tower",
+        "proportion": 0.8
+    },
+    {
+        "symbol": "VZ",
+        "unique_tag": "1",
+        "start_price": 42.57,
+        "cost_per_grid": 500,
+        "grid_price_type": "classic",
+        "proportion": 0.8
+    },
+    {
+        "symbol": "TQQQ",
+        "unique_tag": "1",
+        "start_price": 77.4,
+        "cost_per_grid": 500,
+        "grid_price_type": "tower",
+        "proportion": 0.8
+    }
+]
