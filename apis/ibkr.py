@@ -124,7 +124,7 @@ class IBapi(BaseAPI):
         return self._current_req_id_counter
 
     # --- Internal IB Event Handlers (Delegating to registered handlers) ---
-    async def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract: Optional[Contract] = None):
+    async def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract: Optional[any] = None):
         # Filter out common informational messages or handle them differently
         info_codes = [2104, 2106, 2108, 2158, 2103, 2105, 1100, 1101, 1102, 2100, 2107, 2157, 2168, 2169, 2170]
         # 200: No security definition found (can be an error for reqContractDetails)
@@ -188,10 +188,10 @@ class IBapi(BaseAPI):
             print(f"IBapi: Error qualifying contract for {symbol}: {e}")
             return None
 
-    async def place_limit_order(self, contract: Contract, action: str, quantity: float, 
+    async def place_limit_order(self, contract: any, action: str, quantity: float, 
                                 limit_price: float, order_ref: str = "", tif: str = "GTC", 
                                 transmit: bool = True, outside_rth: bool = False,
-                                order_id_to_use: Optional[int] = None) -> Optional[Trade]:
+                                order_id_to_use: Optional[int] = None) -> Optional[any]:
         """Places a limit order and returns the ib_insync Trade object."""
         if not self.isConnected():
             print("IBapi: Cannot place order, not connected.")
@@ -259,14 +259,14 @@ class IBapi(BaseAPI):
             print(f"IBapi: Error sending cancellation request for order ID {order_id_to_cancel}: {e}")
             return False
         
-    def cancel_order(self, order_to_cancel: Order):
+    def cancel_order(self, order_to_cancel: Any):
         """Cancels an existing order using the ib_insync Order object."""
         if not self.isConnected():
             print("IBapi: Cannot cancel order, not connected.")
             return False
         if order_to_cancel and (order_to_cancel.permId or order_to_cancel.orderId != 0) : # Check if it's a valid order reference
             try:
-                # print(f"IBapi: Requesting cancellation for OrderID: {order_to_cancel.orderId} (PermID: {order_to_cancel.permId or 'N/A'})")
+                # print(f"IBapi: Requesting cancellation for OrderID: {order_to_cancel.orderId} {order_to_cancel.lmtPrice} (PermID: {order_to_cancel.permId or 'N/A'})")
                 trade = self.ib.cancelOrder(order_to_cancel) # cancelOrder returns a Trade object for the cancellation
                 # await asyncio.wait_for(trade.statusEvent, timeout=5) # Wait for cancel status
                 # print(f"IBapi: Cancellation request for order {order_to_cancel.orderId} status: {trade.orderStatus.status if trade.orderStatus else 'Unknown'}")
@@ -372,9 +372,6 @@ class IBapi(BaseAPI):
             total += bar_high - bar_low
 
         return round(total/len(data), 2)
-    
-    def run(self):
-        self.ib.run()
     
     # 需要订阅才能使用
     async def get_current_price(
@@ -522,7 +519,7 @@ class IBapi(BaseAPI):
             # print("IBapi ATR Calc: True Range series is empty after dropna.")
         return None
 
-    async def get_atr(self, contract_spec: Contract, # Can be an unqualified Contract object
+    async def get_atr(self, contract_spec: Any, # Can be an unqualified Contract object
                       atr_period: int = 14, 
                       hist_duration_str: str = "30 D", # Fetch enough data for ATR calc
                       hist_bar_size: str = "1 day") -> Optional[float]:

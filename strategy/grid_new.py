@@ -17,12 +17,13 @@ if __name__ == '__main__': # Allow running/importing from different locations
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
-from apis.ibkr import IBapi # Your BaseAPI implementation for IBKR
+from utils import utils
+from apis.api import BaseAPI
 from strategy.engine import Engine # Your base Engine class
 
 # --- Constants ---
 PENDING_ORDERS_FILE_TPL = "{strategy_id}_pending_cycles.json" # For persisting active grid cycles
-WATCHLIST_FILE = "watchlist_grid_config.json"  # For symbols and their daily params
+
 ORDER_REF_PREFIX = "gridflex_" # Changed prefix for clarity
 NUM_BUY_GRIDS_BELOW_MARKET = 2
 NUM_SELL_GRIDS_ABOVE_MARKET = 2
@@ -90,14 +91,15 @@ class LiveGridCycle: # Renamed from LiveGridTrade for clarity, represents one fu
         return obj
 
 class GridUnit:
-    def __init__(self, api: IBapi, contract: Contract, strategy_id: str, buy_price: float, sell_price: float, shares: float, get_order_id: Callable[[str], int]):
+    def __init__(self, api: BaseAPI, contract: Contract, strategy_id: str, buy_price: float, sell_price: float, cost_per_grid: float, get_order_id: Callable[[str], int]):
         self.api = api
         self.contract = contract
         self.strategy_id = strategy_id
         self.status = "deactive"
         self.buy_price = buy_price
         self.sell_price = sell_price
-        self.shares_per_grid = shares
+        self.shares_per_grid = int(cost_per_grid/buy_price)
+        self.cost_per_grid = cost_per_grid
         # 只有一个网格会同时最多有2个买入订单或2个卖出订单（策略初始化时当前价格所处的那个网格）。
         # 其余的网格上只有一个买单或卖单。
         # 建仓单字典
@@ -140,7 +142,7 @@ class GridUnit:
 
         # Make up to 3 attempts if place_limit_order returns None (submission failure)
         api_trade_obj: Optional[Trade] = None
-        for attempt in range(3):
+        for attempt in range(1):
             api_trade_obj = await self.api.place_limit_order( # This is from BaseAPI, returns ib_insync.Trade
                 contract, action.upper(), float(shares), price, 
                 order_ref=order_ref, order_id_to_use=order_id
@@ -148,10 +150,10 @@ class GridUnit:
             if api_trade_obj and api_trade_obj.order.orderId == order_id:
                 return api_trade_obj.order
                 # break # Successful submission
-            print(f"  Attempt {attempt + 1}/3 to place {action} ({purpose}) OrderID {order_id} for {self.strategy_id} failed. Retrying in 1s...")
+            # print(f"  Attempt {attempt + 1}/3 to place {action} ({purpose}) OrderID {order_id} for {self.strategy_id} failed. Retrying in 1s...")
             await asyncio.sleep(1) # Wait 1 second before retry
         
-        print(f"  Failed to place {action} ({purpose}) OrderID {order_id} for {self.strategy_id} after 3 attempts. Logging failure.")
+        # print(f"  Failed to place {action} ({purpose}) OrderID {order_id} for {self.strategy_id} after 3 attempts. Logging failure.")
         return None
     
     # 根据操作动作以及目标更新订单字典
@@ -179,7 +181,7 @@ class GridUnit:
         order = await self.place_grid_leg_order("BUY", self.buy_price, self.shares_per_grid, purpose)
         if order:
             self._update_orders_info("BUY", purpose, order, old_order_id)
-            return order.orderId
+            return order
       
     async def sell(self, purpose: str, old_order_id: int = None) -> Optional[any]:
         order = await self.place_grid_leg_order("SELL", self.sell_price, self.shares_per_grid, purpose)
@@ -221,11 +223,11 @@ class GridUnit:
         
         self.net_profit += log_entry["net_profit"]
         self.completed_count += 1
-        self.total_open_cost_time += round((cycle.open_done_time - cycle.open_apply_time)/1000)
-        self.total_close_cost_time += round((cycle.close_done_time - cycle.close_apply_time)/1000)
+        self.total_open_cost_time += round((cycle.open_done_time - cycle.open_apply_time))
+        self.total_close_cost_time += round((cycle.close_done_time - cycle.close_apply_time))
         self.trade_logs.append(log_entry)
-        print(f"  LOGGED CYCLE for {self.strategy_id}: Open {log_entry['open_action']} @{log_entry['open_price']:.2f}, "
-              f"Close {log_entry['close_action']} @{log_entry['close_price']:.2f}. Net PNL: {log_entry['net_profit']:.2f}")
+        # print(f"  LOGGED CYCLE for {self.strategy_id}: Open {log_entry['open_action']} @{log_entry['open_price']:.2f}, "
+        #       f"Close {log_entry['close_action']} @{log_entry['close_price']:.2f}. Net PNL: {log_entry['net_profit']:.2f}")
         return
     
     async def order_status_update(self, trade: Trade, order_status: OrderStatus):
@@ -233,8 +235,8 @@ class GridUnit:
         action = trade.order.action # BUY or SELL
         order_id = trade.order.orderId
         lmt_price = trade.order.lmtPrice
-        if order_status.status in ["Filled", "Cancelled", "ApiCancelled", "Inactive", "Rejected"]:
-            print(f"GridEngine: OrderUpdate for {self.strategy_id}, OrderID {order_id} ({action} {self.contract.symbol}), Status: {order_status.status}, Filled: {order_status.filled}@{order_status.lastFillPrice:.2f}")
+        # if order_status.status in ["Filled", "Cancelled", "ApiCancelled", "Inactive", "Rejected"]:
+        #     print(f"GridEngine: OrderUpdate for {self.strategy_id}, OrderID {order_id} ({action} {self.contract.symbol}), Status: {order_status.status}, Filled: {order_status.filled}@{order_status.lastFillPrice:.2f}")
 
         if order_status.status == "Filled":
             new_action = "SELL" if action == "BUY" else "BUY"
@@ -249,9 +251,11 @@ class GridUnit:
                 # await self.sell("CLOSE", order_id) if action.upper() == "BUY" else await self.buy("CLOSE", order_id)
                 if action.upper() == "BUY":
                     await self.sell("CLOSE", order_id)
+                    price = self.sell_price
                 else:
                     await self.buy("CLOSE", order_id)
-                print(f"  OPEN {action} filled for {self.strategy_id}: {self.contract.symbol} @{lmt_price:.2f} {self.shares_per_grid:.2f}. Placing CLOSE {new_action}")
+                    price = self.buy_price
+                # print(f"  OPEN {action} filled for {self.strategy_id}: {self.contract.symbol} @{lmt_price:.2f} {self.shares_per_grid:.2f}. Placing CLOSE {new_action} @{price}")
             elif order_id in self.close_orders.keys():
                 # 更新平仓成交时间，然后进行统计
                 cycle = self.close_orders[order_id]
@@ -268,7 +272,7 @@ class GridUnit:
                     await self.sell("OPEN", order_id)
                 else:
                     await self.buy("OPEN", order_id)
-                print(f"  CLOSE {action} filled for {self.strategy_id}: {self.contract.symbol} @{lmt_price:.2f} {self.shares_per_grid:.2f}. Placing OPEN {new_action}")
+                # print(f"  CLOSE {action} filled for {self.strategy_id}: {self.contract.symbol} @{lmt_price:.2f} {self.shares_per_grid:.2f}. Placing OPEN {new_action}")
             else:
                 print(f"Order Status Update: unknown order id: {order_id}")
         elif order_status.status in ["Cancelled", "ApiCancelled", "Inactive", "Rejected"]:
@@ -276,21 +280,30 @@ class GridUnit:
 
     # 取消所有处于建仓的订单
     def cancel_open_orders(self):
-        print("GridStrategy: cancel open orders: ")
+        # print("GridStrategy: cancel open orders: ")
         for order_id, cycle in self.open_orders.items() or {}:
             # 提交取消命令，只需要提交命令即可，订单状态更新事件中会清理相关数据
-            print(f"GridStrategy: cancel open orders: {order_id}")
+            # print(f"GridStrategy: cancel open orders: {order_id}")
             self.api.cancel_order(cycle._open_order)
+            time.sleep(0.1)
+        self.open_orders = {}
             
           
     def cancel_all_orders(self):
+        # 取消订单操作之间增加一点时间，避免操作过快导致问题
         for order_id, cycle in self.open_orders.items() or {}:
             # 提交取消命令，只需要提交命令即可，订单状态更新事件中会清理相关数据
-            self.api.cancel_order(cycle._open_order)
-
+            if not self.api.cancel_order(cycle._open_order):
+                print(f"cancel open order failed: orderId:{cycle.open_order_id} price:{cycle.open_price}")
+            time.sleep(0.1)
+        self.open_orders = {}
+        
         for order_id, cycle in self.close_orders.items() or {}:
             # 提交取消命令，只需要提交命令即可，订单状态更新事件中会清理相关数据
-            self.api.cancel_order(cycle._close_order)
+            if not self.api.cancel_order(cycle._close_order):
+                print(f"cancel close order failed: {cycle.close_order_id} {cycle.close_price}")
+            time.sleep(0.1)
+        self.close_orders = {}
             
     def DoStop(self):
         self.cancel_all_orders()
@@ -299,10 +312,10 @@ class GridUnit:
         #     print(self.trade_logs)
 
 class GridStrategy:
-    def __init__(self, api: IBapi, symbol: str, start_price: float, cost_per_grid: float, proportion: float,
+    def __init__(self, api: BaseAPI, symbol: str, start_price: float, cost_per_grid: float, proportion: float,
                  grid_price_type: str = "classic", strategy_id: str = "",
-                 get_order_id: Callable[[str], int] = None): # For initial setup only
-        self.data_dir = "data"
+                 get_order_id: Callable[[str], int] = None, data_dir: str = "data"): # For initial setup only
+        self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
         
         self.api = api
@@ -327,10 +340,13 @@ class GridStrategy:
         
         # 网格初始化
         self.units: List[GridUnit] = []
+        
+        self.curr_cash = 0
+        self.max_cash = 0
 
     def __str__(self):
-        return (f"GridParams(ID={self.strategy_id}, Sym={self.symbol}, CurrPrice={self.start_price:.2f} Bds=[{self.lower_bound:.2f}-{self.upper_bound:.2f}], "
-                f"Spc={self.price_spacing:.4f}, Shs={self.shares_per_grid}, Exch={self.primary_exchange})")
+        return (f"GridParams(ID={self.strategy_id}, Sym={self.symbol}, CurrPrice={self.start_price:.2f} Type={self.grid_price_type} Proportion={self.proportion:.2f}, "
+                f"Cost={self.cost_per_grid:.2f})")
     
     # 在策略下提交订单
     async def place_grid_order(self, action: str, price: float, shares: int, purpose: str) -> Optional[any]:
@@ -350,16 +366,18 @@ class GridStrategy:
       
     def build_grid_units(self, curr_price: float) -> List[GridUnit]:
         propur = 0.05 # 金字塔网格，每个网格价差增加5%
+        cost_diff_propor = 0.05  # 相邻网格的成本差异
         base_buy_price, base_sell_price = round(curr_price * 0.998, 4), round(curr_price * 0.998 + self.price_spacing, 4)
         
         all_units = []
         buy_price, sell_price = base_buy_price, base_sell_price
-        curr_unit = GridUnit(self.api, self.contract, self.strategy_id, round(buy_price, 2), round(sell_price, 2), self.shares_per_grid, self.get_order_id)
+        curr_unit = GridUnit(self.api, self.contract, self.strategy_id, round(buy_price, 2), round(sell_price, 2), self.cost_per_grid, self.get_order_id)
         
         # 组织上网格
+        cost_per_grid = self.cost_per_grid
         buy_price, sell_price, spacing = base_sell_price, base_sell_price + self.price_spacing, self.price_spacing
         while sell_price <= self.upper_bound:
-            unit = GridUnit(self.api, self.contract, self.strategy_id, round(buy_price, 2), round(sell_price, 2), self.shares_per_grid, self.get_order_id)
+            unit = GridUnit(self.api, self.contract, self.strategy_id, round(buy_price, 2), round(sell_price, 2), cost_per_grid, self.get_order_id)
             all_units.append(unit)
             
             # 更新下一个网格的配置
@@ -367,7 +385,8 @@ class GridStrategy:
             # 通过控制每个网格的价差控制网格间距，默认使用classic固定价差.
             if self.grid_price_type == "tower":
                 # 等比例增大价差，距离当前价格越远价差越大
-                spacing = round(spacing * (1 + propur), 4)
+                # spacing = round(spacing * (1 + propur), 4)
+                cost_per_grid = round(cost_per_grid * (1 + cost_diff_propor), 4)
             sell_price = buy_price + spacing
         
         # 网格根据卖单价格从高到低
@@ -375,9 +394,10 @@ class GridStrategy:
         all_units.append(curr_unit)
 
         # 组织下网格
+        cost_per_grid = self.cost_per_grid
         buy_price, sell_price, spacing = base_buy_price - self.price_spacing, base_buy_price, self.price_spacing
         while buy_price > self.lower_bound:
-            unit = GridUnit(self.api, self.contract, self.strategy_id, round(buy_price, 2), round(sell_price, 2), self.shares_per_grid, self.get_order_id)
+            unit = GridUnit(self.api, self.contract, self.strategy_id, round(buy_price, 2), round(sell_price, 2), cost_per_grid, self.get_order_id)
             all_units.append(unit)
             
             # 更新新网格配置
@@ -385,7 +405,8 @@ class GridStrategy:
             # 通过控制每个网格的价差控制网格间距，默认使用classic固定价差.
             if self.grid_price_type == "tower":
                 # 等比例增大价差，距离当前价格越远价差越大
-                spacing = round(spacing * (1 + propur), 4)
+                # spacing = round(spacing * (1 + propur), 4)
+                cost_per_grid = round(cost_per_grid * (1 - cost_diff_propor), 4)
             buy_price = round(sell_price - spacing, 4)
 
         return all_units
@@ -541,8 +562,8 @@ class GridStrategy:
         
         # 根据标的历史数据计算当前策略参数
         atr = await self.api.get_atr(self.contract)
-        self.lower_bound = round(self.start_price - atr * 2, 2)
-        self.upper_bound = round(self.start_price + atr * 2, 2)
+        self.lower_bound = round(self.start_price - atr * 15, 2)
+        self.upper_bound = round(self.start_price + atr * 15, 2)
         self.price_spacing = round(self.proportion * self.start_price/100, 2)
         self.shares_per_grid = round(self.cost_per_grid / self.start_price, 0)
         print(f"Configured strategy: {self}")
@@ -561,7 +582,7 @@ class GridStrategy:
         # 根据配置参数开启网格
         await self.maintain_active_grids_status(self.start_price, True)
         # for unit in self.units:
-        #     print(f"unit: {unit.status} {unit.buy_price} - {unit.sell_price}")
+        #     print(f"unit: {unit.status} {unit.buy_price} - {unit.sell_price} {unit.cost_per_grid}")
         
         return 
 
@@ -587,8 +608,8 @@ class GridStrategy:
             if order_status.status == "Filled":
                 # TODO：是否需要统计
                 cycle = self.pending_orders[order_id]
-                net_profit = round((cycle.close_price - cycle.open_price)*cycle.shares, 2)
-                print(f" QUICK_CLOSE filled, {cycle.symbol} {cycle.shares} {cycle.close_action} @{cycle.open_price} profit: {net_profit}")
+                net_profit = abs(round((cycle.close_price - cycle.open_price)*cycle.shares, 2))
+                print(f" QUICK_CLOSE filled, {cycle.symbol} {cycle.shares} {cycle.open_action} @{cycle.open_price} - {cycle.close_action} @{cycle.close_price} profit: {net_profit}")
                 
                 # 已经平仓的订单从dict中删除
                 del self.pending_orders[order_id]
@@ -621,11 +642,11 @@ class GridStrategy:
         
         # 以当前网格之后的第2个网格的买入价格作为最低价格
         active_lower_price = self.lower_bound
-        if offset + 2 >= 0:
+        if offset + 2 < len(self.units):
             active_lower_price = self.units[offset+2].buy_price
         # 以当前网格之前的第2个网格的卖出价格作为最高价格
         active_upper_price = self.upper_bound
-        if offset - 2 < len(self.units):
+        if offset - 2 >= 0:
             active_upper_price = self.units[offset-2].sell_price
         
         for unit in self.units or []:
@@ -672,7 +693,8 @@ class GridStrategy:
                         self.pending_orders[order.orderId] = cycle
                 print(f"Loaded {len(self.pending_orders.keys())} active grid cycles for {self.strategy_id} from {file_path}")
         except FileNotFoundError:
-            print(f"No pending grid cycles file for {self.strategy_id} ('{file_path}'). Starting fresh for this strategy.")
+            # print(f"No pending grid cycles file for {self.strategy_id} ('{file_path}'). Starting fresh for this strategy.")
+            pass
         except json.JSONDecodeError:
             print(f"Error decoding JSON for {self.strategy_id} from '{file_path}'. Starting fresh.")
 
@@ -695,12 +717,15 @@ class GridStrategy:
             try: os.remove(file_path)
             except Exception as e: print(f"Error removing old pending file {file_path}: {e}")
 
-    def DoStop(self):
-        print(f"stop strategy: {self.strategy_id} --------")
+    def DoStop(self) -> Any:
+        # print(f"stop strategy: {self} ------")
         self._save_active_grid_cycles()
+        # print(f"save active grids done -> ")
         # pending list 也需要取消
         for cycle in self.pending_orders.values() or []:
             self.api.cancel_order(cycle._close_order)
+        self.pending_orders = {}
+        # print(f" cancel pending orders done -> ")
         
         # 取消所有已提交的订单
         net_profit = 0.0
@@ -713,165 +738,9 @@ class GridStrategy:
             total_open_cost_time += unit.total_open_cost_time
             total_close_cost_time += unit.total_close_cost_time
             unit.DoStop()
-        print(f"Net Profit: {net_profit}, Completed Count: {completed_count}")
+        # print(f" cancel all orders done -> ")
+
         if completed_count > 0:
-            print(f"AVG Time Cost: open({round(total_open_cost_time/completed_count, 2)}) close({round(total_close_cost_time/completed_count, 2)})")
-
-class GridStrategyEngine(Engine):
-    def __init__(self, ib_api: IBapi, data_dir: str = "data"):
-        self.strategy_name = "Grid Strategy"
-        self.api = ib_api
-        self.data_dir = data_dir
-        os.makedirs(self.data_dir, exist_ok=True)
-
-        self.watchlist_file = os.path.join(self.data_dir, WATCHLIST_FILE) # Centralized path
-
-        self.strategy_params: Dict[str, GridStrategy] = {}
-        
-        # order_id -> strategy_id
-        self.order_id_strategy_id: Dict[int, str] = {}
-        
-        self.is_running = False
-        self.next_order_id_counter: Optional[int] = None
-        self.trade_log_df = pd.DataFrame(columns=[
-            "Timestamp", "StrategyID", "Symbol", "ActionType", 
-            "Price1", "Price2", "Shares", "GrossProfit", "Fees", "NetProfit", 
-            "OrderRef1", "OrderRef2"
-        ])
-
-    # --- Config and State Loading/Saving ---
-    def _load_watchlist_and_calculate_params(self):
-        # ... (Your existing _load_watchlist_and_calculate_params method)
-        # Make sure it populates self.strategy_params with GridStrategyParams instances
-        # And ensure GridStrategyParams includes primary_exchange, max_grids_up_config, max_grids_down_config
-        try:
-            with open(self.watchlist_file, 'r') as f: watchlist_data = json.load(f)
-        except Exception as e: print(f"Error loading watchlist: {e}"); watchlist_data = []
-
-        for item in watchlist_data:
-            symbol = item.get("symbol")
-            start_price = item.get("start_price") 
-            # shares = item.get("shares_per_grid", 10)
-            # price_spacing_config = item.get("price_per_grid", 0.05) 
-            grid_price_type = item.get("grid_price_type", "classic")
-            # fee = item.get("fee_per_trade", 1.0)
-            unique_tag = item.get("unique_tag", symbol) 
-            # primary_exchange = item.get("primary_exchange", "SMART")
-            proportion = item.get("proportion", 1)
-            cost_per_grid = item.get("cost_per_grid", 500)
-
-            if not all([symbol, start_price is not None]): # adr_abs can be 0
-                print(f"Skipping watchlist item {item.get('symbol', 'Unknown')} due to missing symbol or start_price.")
-                continue
-            unique_tag = 1
-            for grid_price_type in ["classic", "tower"]:
-                for proportion in [0.8, 0.9, 1, 1.1]:
-            #         for cost_per_grid in [400, 450, 500]:
-                    strategy_id = f"GRID_{unique_tag}_{symbol}"
-                    params = GridStrategy(self.api, symbol, start_price, cost_per_grid, proportion, grid_price_type, strategy_id, get_order_id=self.get_register_order_id_strategy_id)
-                    self.strategy_params[strategy_id] = params
-                    unique_tag += 1
-
-
-    def get_register_order_id_strategy_id(self, strategy_id: str) -> int:
-      order_id = self._get_next_order_id_local()
-      self.order_id_strategy_id[order_id] = strategy_id
-      return order_id
-      
-    def _get_next_order_id_local(self) -> int:
-        if self.next_order_id_counter is None:
-            fetched_id = self.api.get_next_order_id() # This should be a sync call to IBapi
-            if fetched_id is None: raise Exception("Failed to get initial order ID from IBapi.")
-            self.next_order_id_counter = fetched_id
-        
-        current_id = self.next_order_id_counter
-        self.next_order_id_counter += 1
-        return current_id
-
-    def InitStrategy(self): # Renamed and made async
-        print(f"--- {self.strategy_name} Async Initialize starting ---")
-        if not self.api.isConnected():
-            print("Error: IB API not connected. Abort init!")
-            return False
-        
-        # 注册订单状态更新事件
-        self.api.register_order_status_update_handler(self.handle_order_update_async)
-        self.api.register_execution_fill_handler(self.handle_fill_async)
-
-        # 从文件中载入策略配置
-        self._load_watchlist_and_calculate_params() # Sync
-        # self._load_active_grid_cycles() # Sync, loads LGC objects
-
-        # Initialize order ID counter
-        initial_ib_order_id = self.api.get_next_order_id() # Assuming this is a sync call in your IBapi
-        if initial_ib_order_id is None:
-            print("Error: Could not get initial next valid order ID from IB API. Halting strategy init.")
-            return False
-        self.next_order_id_counter = initial_ib_order_id
-        print(f"Base OrderID for this session will start from: {self.next_order_id_counter}")
-
-        self.is_running = True
-
-        for strategy_id, params in self.strategy_params.items():
-            # print(f"Initializing orders for strategy: {strategy_id} ({params.symbol})")
-            asyncio.get_event_loop().run_until_complete(params.InitStrategy())
-
-        # self._save_active_grid_cycles()
-        print(f"--- {self.strategy_name} Async Initialize complete ---")
-        return True
-
-
-    async def handle_order_update_async(self, trade: Trade, order_status: OrderStatus):
-        if not self.is_running: return
-        # 根据order_id_strategy获取对应的策略
-        order_id = trade.order.orderId
-        strategy_id = self.order_id_strategy_id.get(order_id, "")
-        if not strategy_id: return
-        params = self.strategy_params[strategy_id]
-        if not params:
-            return 
-        await params.update_order_status(trade, order_status)
-
-
-    async def handle_fill_async(self, trade: Trade, fill: Fill):
-        # ... (Your existing handle_fill_async logic for detailed logging) ...
-        pass
-
-    def DoStop(self):
-        """
-        停止策略执行:
-        1. 将未完成的订单 (active_grid_trades) 记录到文件中。
-        2. (可选) 尝试取消所有在经纪商处的活动挂单 (这需要 self.api.cancel_order_by_id)。
-        3. 统计今日所有订单情况，包括收益、手续费等等。
-        """
-        print("Stopping Grid Strategy Engine")
-        self.is_running = False
-        
-        # --- 统计今日所有订单情况 ---
-        # This requires the trade_log to be comprehensive or to query IB for today's trades.
-        # The self.trade_log currently only has completed grid sell PNL.
-        # if self.trade_log:
-        #     log_df = pd.DataFrame(self.trade_log)
-        #     total_net_profit = log_df['net_profit'].sum()
-        #     total_gross_profit = log_df['gross_profit'].sum()
-        #     total_fees_paid = log_df['fees'].sum()
-        #     num_closed_grids = len(log_df)
-
-        #     print("\n--- Strategy Run Summary ---")
-        #     print(f"Total Closed Grid Trades: {num_closed_grids}")
-        #     print(f"Total Gross Profit (from closed grids): ${total_gross_profit:.2f}")
-        #     print(f"Total Fees Paid (from closed grids): ${total_fees_paid:.2f}")
-        #     print(f"Total Net Profit (from closed grids): ${total_net_profit:.2f}")
-        #     if num_closed_grids > 0:
-        #         print(f"Average Net Profit per Closed Grid: ${total_net_profit/num_closed_grids:.2f}")
-        # else:
-        #     print("No grid trades were fully closed and logged during this session.")
-
-        for strategy_id, params in self.strategy_params.items() or {}:
-            params.DoStop()
-
-    # _read_watchlist_raw can remain sync
-    def _read_watchlist_raw(self) -> List[Dict]:
-        try:
-            with open(self.watchlist_file, 'r') as f: return json.load(f)
-        except Exception: return []
+            print(f" Net Profit: {round(net_profit, 2)},  Completed Count: {completed_count},  AVG Time Cost: open({round(total_open_cost_time/completed_count, 2)}) close({round(total_close_cost_time/completed_count, 2)})")
+        # print(" DoStop done.")
+        return {"proportion": self.proportion, "grid_type": self.grid_price_type, "share_per_grid": self.shares_per_grid, "net_profit": net_profit}

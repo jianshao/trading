@@ -152,7 +152,7 @@ class BacktestEngine:
         for strategy in self.strategies.values():
             if hasattr(strategy, "on_stop_async") and callable(strategy.on_stop_async):
                 await strategy.on_stop_async()
-            elif hasattr(strategy, "on_stop") and callable(strategy.on_stop):
+            elif hasattr(strategy, "DoStop") and callable(strategy.DoStop):
                 strategy.on_stop()
         
         print("--- Backtest Completed ---")

@@ -80,23 +80,36 @@ class BaseAPI(ABC):
         pass
 
     @abstractmethod
-    async def place_limit_order(
-        self,
-        contract: Any, # Broker-specific Contract object or GenericContract
-        action: str,    # "BUY" or "SELL"
-        quantity: float,
-        limit_price: float,
-        order_ref: str = "",
-        tif: str = "GTC",
-        transmit: bool = True,
-        outside_rth: bool = False,
-        order_id_to_use: Optional[int] = None
-    ) -> Optional[Any]: # Returns broker-specific Trade/Order object or a generic identifier
-        """Places a limit order."""
+    async def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract: Optional[Any] = None):
+        pass
+    
+    @abstractmethod
+    async def _on_ib_order_status_event(self, trade: Any):
+        pass
+    
+    @abstractmethod
+    async def _on_ib_exec_details_event(self, trade: Any, fill: Any):
+        pass
+    
+    @abstractmethod
+    async def _on_ib_open_order_snapshot_event(self, trade: Any):
         pass
 
     @abstractmethod
-    async def cancel_order(
+    def _on_ib_disconnected_event(self):
+        pass
+    
+
+    @abstractmethod
+    async def place_limit_order(self, contract: Any, action: str, quantity: float, 
+                                limit_price: float, order_ref: str = "", tif: str = "GTC", 
+                                transmit: bool = True, outside_rth: bool = False,
+                                order_id_to_use: Optional[int] = None) -> Optional[Any]:
+        """Places a limit order and returns the ib_insync Trade object."""
+        pass
+
+    @abstractmethod
+    def cancel_order(
         self,
         order_to_cancel: Any # Broker-specific Order object or GenericOrder or just orderId
     ) -> bool:
@@ -110,30 +123,8 @@ class BaseAPI(ABC):
 
     # --- Market & Account Data ---
     @abstractmethod
-    async def get_contract_details(
-        self,
-        symbol: str,
-        sec_type: str = "STK",
-        exchange: str = "SMART",
-        currency: str = "USD",
-        primary_exchange: Optional[str] = None
-    ) -> Optional[Any]: # Returns broker-specific qualified Contract object or GenericContract
-        """Fetches and qualifies contract details."""
-        pass
-
-    @abstractmethod
-    async def get_historical_data(
-        self,
-        contract: Any, # Broker-specific Contract object or GenericContract
-        end_date_time: str = "",
-        duration_str: str = "1 M",
-        bar_size_setting: str = "1 min",
-        what_to_show: str = 'TRADES',
-        use_rth: bool = True,
-        format_date: int = 1, # Or a more generic way to specify date format
-        timeout_seconds: int = 60
-    ) -> pd.DataFrame: # Standardize to return Pandas DataFrame
-        """Fetches historical bar data."""
+    async def get_contract_details(self, symbol: str, exchange: str = "SMART", 
+                             currency: str = "USD", primary_exchange: Optional[str] = None) -> Optional[Any]:
         pass
 
     @abstractmethod
@@ -150,52 +141,30 @@ class BaseAPI(ABC):
         pass
 
     @abstractmethod
-    async def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[any]:  # List of position details
+    async def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[Any]:  # List of position details
         """Fetches current account positions."""
         pass
 
-
-    # --- Callback Registration ---
-    # Callbacks should ideally pass standardized data structures if possible,
-    # or the consuming engine needs to know the broker-specific types.
-    # For now, using 'Any' but could define GenericOrderStatus, GenericFill.
-
     @abstractmethod
-    def register_order_status_update_handler(
-        self,
-        handler: Callable[[Any, Any], Coroutine[Any, Any, None]] # e.g., (broker_trade_obj, broker_order_status_obj)
-    ):
-        """Registers a handler for order status updates."""
+    async def get_atr(self, contract_spec: Any, # Can be an unqualified Contract object
+                      atr_period: int = 14, 
+                      hist_duration_str: str = "30 D", # Fetch enough data for ATR calc
+                      hist_bar_size: str = "1 day") -> Optional[float]:
+        pass
+
+    # --- Callback Registration Methods ---
+    @abstractmethod
+    def register_order_status_update_handler(self, handler: Callable[[Any, Any], Coroutine[Any, Any, None]]):
         pass
 
     @abstractmethod
-    def register_execution_fill_handler(
-        self,
-        handler: Callable[[Any, Any], Coroutine[Any, Any, None]] # e.g., (broker_trade_obj, broker_fill_obj)
-    ):
-        """Registers a handler for order execution (fill) details."""
+    def register_execution_fill_handler(self, handler: Callable[[Any, Any], Coroutine[Any, Any, None]]):
         pass
 
     @abstractmethod
-    def register_error_handler(
-        self,
-        handler: Callable[[int, int, str, Optional[Any]], Coroutine[Any, Any, None]] # (reqId, errCode, errMsg, contract_obj_if_any)
-    ):
-        """Registers a handler for API errors."""
+    def register_error_handler(self, handler: Callable[[int, int, str, Optional[Any]], Coroutine[Any, Any, None]]):
         pass
         
     @abstractmethod
-    def register_open_order_snapshot_handler(
-        self,
-        handler: Callable[[Any], Coroutine[Any, Any, None]] # e.g., (broker_trade_obj)
-    ):
-        """Registers a handler for open order snapshots received on connect or request."""
-        pass
-        
-    @abstractmethod
-    def register_disconnected_handler(
-        self,
-        handler: Callable[[], Coroutine[Any, Any, None]] # No arguments
-    ):
-        """Registers a handler for when the API disconnects."""
+    def register_open_order_snapshot_handler(self, handler: Callable[[Any, Any, Any], Coroutine[Any, Any, None]]):
         pass
