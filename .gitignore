@@ -1,1 +1,5 @@
 .venv
+apis/__pycache__/
+mockApi/__pycache__/
+strategy/__pycache__/
+utils/__pycache__/

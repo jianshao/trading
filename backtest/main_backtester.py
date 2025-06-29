@@ -4,7 +4,6 @@ import sys
 import time
 from typing import List
 import asyncio
-import matplotlib.pyplot as plt
 import pandas as pd
 
 if __name__ == '__main__': # Allow running/importing from different locations
@@ -15,24 +14,13 @@ if __name__ == '__main__': # Allow running/importing from different locations
         
 from apis.ibkr import IBapi
 from mockApi.api import MockApi
-from strategy.grid_new import GridStrategyEngine
-# from utils.utils import *
+from strategy.strategy_engine import GridStrategyEngine
 from utils import utils
 
 Init_Cash = 5000
 
 async def main_loop(mockApi: MockApi, api: IBapi, symbols: List[str]):
     # 获取历史数据，将历史数据导入mock服务。导入数据过程中会模拟券商的成交通知逻辑。
-    # print("Mock starting.......")
-    # end_dates = ["20250505 17:00:00 us/eastern", "20250506 17:00:00 us/eastern", "20250507 17:00:00 us/eastern", "20250508 17:00:00 us/eastern", "20250509 17:00:00 us/eastern",
-    #              "20250512 17:00:00 us/eastern", "20250513 17:00:00 us/eastern", "20250514 17:00:00 us/eastern", "20250515 17:00:00 us/eastern", "20250516 17:00:00 us/eastern",
-    #              "20250519 17:00:00 us/eastern", "20250520 17:00:00 us/eastern", "20250521 17:00:00 us/eastern", "20250522 17:00:00 us/eastern", "20250523 17:00:00 us/eastern",
-    #              "20250526 17:00:00 us/eastern", "20250527 17:00:00 us/eastern", "20250528 17:00:00 us/eastern", "20250529 17:00:00 us/eastern", "20250530 17:00:00 us/eastern",
-    #              "20250602 17:00:00 us/eastern", "20250603 17:00:00 us/eastern", "20250604 17:00:00 us/eastern", "20250605 17:00:00 us/eastern", "20250606 17:00:00 us/eastern",
-    #              "20250609 17:00:00 us/eastern", "20250610 17:00:00 us/eastern", "20250611 17:00:00 us/eastern", "20250612 17:00:00 us/eastern", "20250613 17:00:00 us/eastern",
-    #              "20250616 17:00:00 us/eastern", "20250617 17:00:00 us/eastern", "20250618 17:00:00 us/eastern", "20250619 17:00:00 us/eastern", "20250620 17:00:00 us/eastern",
-    #              "20250623 17:00:00 us/eastern", "20250624 17:00:00 us/eastern", "20250625 17:00:00 us/eastern", "20250626 17:00:00 us/eastern", "20250627 17:00:00 us/eastern"]
-    # end_dates = ["20250602 17:00:00 us/eastern"]
     end_dates = utils.get_us_trading_days("2025-05-05", "2025-06-28")
     for symbol in symbols:
         print(f"Mock for {symbol}......")

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from apis.api import BaseAPI
 from strategy.engine import Engine
-from strategy.grid_new import GridStrategy
+from strategy.grid import GridStrategy
 
 WATCHLIST_FILE = "watchlist_grid_config.json"  # For symbols and their daily params
 

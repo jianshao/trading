@@ -18,8 +18,9 @@ if __name__ == '__main__': # Only adjust path if running as script directly
         sys.path.insert(0, project_root)
 
 from apis.ibkr import IBapi
-from strategy.grid_new import *
+from strategy.grid import *
 from strategy.engine import Engine
+from strategy.strategy_engine import GridStrategyEngine
 
 STRATEGY_GRID = "grid"
 
