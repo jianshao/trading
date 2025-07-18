@@ -1,5 +1,78 @@
+# Python
+####################################################################
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a source file, so
+#  they will be ignored by extension
+*.manifest
+*.spec
+
+# Pyenv
+.python-version
+
+# Mypy cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Virtual Environments
+.env
 .venv
-apis/__pycache__/
-mockApi/__pycache__/
-strategy/__pycache__/
-utils/__pycache__/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Notebooks
+.ipynb_checkpoints
+
+# Personal config
+config.py # 如果你的配置文件包含敏感信息
+

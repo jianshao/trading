@@ -3,11 +3,14 @@ import asyncio
 import sys
 import os
 import numpy as np
+from ib_insync.util import run
 from typing import Optional, Callable, Any, List, Dict, Coroutine
 
 # Make sure ib_insync is installed: pip install ib_insync
 from ib_insync import *
 import pandas as pd
+
+from strategy import common
 
 if __name__ == '__main__':
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -188,13 +191,17 @@ class IBapi(BaseAPI):
             print(f"IBapi: Error qualifying contract for {symbol}: {e}")
             return None
 
-    async def place_limit_order(self, contract: any, action: str, quantity: float, 
+    async def place_limit_order(self, symbol: str, action: str, quantity: float, 
                                 limit_price: float, order_ref: str = "", tif: str = "GTC", 
                                 transmit: bool = True, outside_rth: bool = False,
                                 order_id_to_use: Optional[int] = None) -> Optional[any]:
         """Places a limit order and returns the ib_insync Trade object."""
         if not self.isConnected():
             print("IBapi: Cannot place order, not connected.")
+            return None
+        
+        contract = await self.get_contract_details(symbol)
+        if not contract:
             return None
 
         order = Order()
@@ -213,11 +220,15 @@ class IBapi(BaseAPI):
         else:
             order.orderId = self.get_next_order_id() # Get a fresh ID from TWS
 
-        print(f"IBapi: Placing Order - ID:{order.orderId}, {order.action} {contract.localSymbol} @{order.lmtPrice} {order.totalQuantity}, "
-              f"Type:{order.orderType}, Ref:'{order.orderRef}'")
+        # print(f"IBapi: Placing Order - ID:{order.orderId}, {order.action} {contract.localSymbol} @{order.lmtPrice} {order.totalQuantity}, "
+            #   f"Type:{order.orderType}, Ref:'{order.orderRef}'")
         
         try:
-            return self.ib.placeOrder(contract, order)
+            trade = self.ib.placeOrder(contract, order)
+            if trade:
+                return common.convert_trade_to_gridorder(trade)
+            else:
+                return None
             # Wait for the order to be submitted to TWS/Gateway (optional, but good for confirmation)
             # For example, wait for the first status update or a short period.
             # await asyncio.wait_for(trade.statusEvent, timeout=5) # Example: wait for first status event
@@ -264,21 +275,22 @@ class IBapi(BaseAPI):
         if not self.isConnected():
             print("IBapi: Cannot cancel order, not connected.")
             return False
-        if order_to_cancel and (order_to_cancel.permId or order_to_cancel.orderId != 0) : # Check if it's a valid order reference
+        ib_order = common.convert_gridorder_to_ib_order(order_to_cancel)
+        if ib_order and (ib_order.permId or ib_order.orderId != 0) : # Check if it's a valid order reference
             try:
                 # print(f"IBapi: Requesting cancellation for OrderID: {order_to_cancel.orderId} {order_to_cancel.lmtPrice} (PermID: {order_to_cancel.permId or 'N/A'})")
-                trade = self.ib.cancelOrder(order_to_cancel) # cancelOrder returns a Trade object for the cancellation
+                trade = self.ib.cancelOrder(ib_order) # cancelOrder returns a Trade object for the cancellation
                 # await asyncio.wait_for(trade.statusEvent, timeout=5) # Wait for cancel status
                 # print(f"IBapi: Cancellation request for order {order_to_cancel.orderId} status: {trade.orderStatus.status if trade.orderStatus else 'Unknown'}")
                 return True
             except asyncio.TimeoutError:
-                print(f"IBapi: Timeout waiting for cancellation status of order {order_to_cancel.orderId}.")
+                print(f"IBapi: Timeout waiting for cancellation status of order {ib_order.orderId}.")
                 return False
             except Exception as e:
-                print(f"IBapi: Error cancelling order {order_to_cancel.orderId}: {e}")
+                print(f"IBapi: Error cancelling order {ib_order.orderId}: {e}")
                 return False
         else:
-            print(f"IBapi: Invalid order object provided for cancellation (OrderID: {order_to_cancel.orderId if order_to_cancel else 'N/A'}).")
+            print(f"IBapi: Invalid order object provided for cancellation (OrderID: {ib_order.orderId if ib_order else 'N/A'}).")
             return False
 
     async def get_historical_data(self, contract: Contract, end_date_time: str = "", 
@@ -298,8 +310,7 @@ class IBapi(BaseAPI):
                 return None
             contract_to_use = qualified_contract
 
-            bars: BarDataList = await asyncio.wait_for(
-                self.ib.reqHistoricalDataAsync(
+            bars: BarDataList = await self.ib.reqHistoricalDataAsync(
                     contract_to_use,
                     endDateTime=end_date_time,
                     durationStr=duration_str,
@@ -307,9 +318,7 @@ class IBapi(BaseAPI):
                     whatToShow=what_to_show,
                     useRTH=use_rth,
                     formatDate=format_date,
-                ),
-                timeout=timeout_seconds
-            )
+                )
             if bars:
                 # print(f"IBapi: Fetched {len(bars)} bars for {contract_to_use.localSymbol}")
                 df = util.df(bars) # Convert BarDataList to DataFrame
@@ -429,11 +438,35 @@ class IBapi(BaseAPI):
             return None
   
         
-    async def get_account_summary(self, tags: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def get_account_summary(self, tags: Optional[List[str]] = None, timeout_seconds: int=10) -> Dict[str, Any]:
         print("""Fetches account summary information (e.g., NetLiq, CashBalance).""")
+        
+        if not self.isConnected():
+            print("IBapi: Not connected. Cannot fetch positions.")
+            return []
+        
+        try:
+            print(f"IBapi: Requesting current account{f' for account {tags}' if tags else ''}...")
+            # ib.positions() is often preferred as it's kept up-to-date by positionEvent
+            # If you need a fresh request:
+            accounts: List[Position] = await asyncio.wait_for(
+                self.ib.accountSummary(), # This requests a fresh batch of positions
+                timeout=timeout_seconds
+            )
+            
+            if accounts and tags: # Filter by account if specified
+                accounts = [{p.account: p} for p in accounts if p.account in tags]
+            
+            return accounts
+        except asyncio.TimeoutError:
+            print(f"IBapi: Timeout fetching account.")
+            return {}
+        except Exception as e:
+            print(f"IBapi: Error fetching account: {e}")
+            return {}
 
         
-    async def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[any]: # 修改 BaseAPI 时也应返回 List[Position] 或 List[GenericPosition]
+    def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[any]: # 修改 BaseAPI 时也应返回 List[Position] 或 List[GenericPosition]
         """
         Fetches all current positions for the default account or a specified account.
         Returns a list of ib_insync.Position objects.
@@ -443,13 +476,14 @@ class IBapi(BaseAPI):
             return []
         
         try:
-            print(f"IBapi: Requesting current positions{f' for account {account}' if account else ''}...")
+            # print(f"IBapi: Requesting current positions{f' for account {account}' if account else ''}...")
             # ib.positions() is often preferred as it's kept up-to-date by positionEvent
             # If you need a fresh request:
-            positions: List[Position] = await asyncio.wait_for(
-                self.ib.reqPositionsAsync(), # This requests a fresh batch of positions
-                timeout=timeout_seconds
-            )
+            # positions: List[Position] = await asyncio.wait_for(
+            #     self.ib.reqPositionsAsync(), # This requests a fresh batch of positions
+            #     timeout=timeout_seconds
+            # )
+            positions: List[Position] = self.ib.reqPositions()
             
             if account: # Filter by account if specified
                 positions = [p for p in positions if p.account == account]

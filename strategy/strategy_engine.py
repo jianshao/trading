@@ -3,12 +3,13 @@ import asyncio
 import datetime
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 from apis.api import BaseAPI
+from strategy import common
 from strategy.engine import Engine
-from strategy.grid import GridStrategy
+from strategy.grid_new import GridStrategy
 
 WATCHLIST_FILE = "watchlist_grid_config.json"  # For symbols and their daily params
 
@@ -37,34 +38,53 @@ class GridStrategyEngine(Engine):
             "OrderRef1", "OrderRef2"
         ])
 
+    def _load_grid_strategies(self, params: List[Dict[Any, Any]]) -> bool:
+        for param in params:
+            symbol = param.get("symbol", "")
+            unique_tag = param.get("unique_tag", 1) 
+            base_price = param.get("base_price") 
+            lower = param.get("lower") 
+            upper = param.get("upper") 
+            proportion = param.get("proportion", 0.015)
+            cost_per_grid = param.get("cost_per_grid", 500)
+            data_file = param.get('data_file')
+            
+            strategy_id = f"GRID_{unique_tag}_{symbol}"
+            grid = GridStrategy(self.api, strategy_id, symbol, 
+                                    base_price, lower, upper, 
+                                    cost_per_grid, proportion, 
+                                    get_order_id=self.get_register_order_id_strategy_id,
+                                    data_file=self.data_dir + "grid/" + data_file)
+            self.strategy_params[strategy_id] = grid
+            
+            start_price = param.get("start_price")
+            pos = 0
+            for position in self.positions:
+                if position.contract.symbol == grid.symbol:
+                    pos = position.position
+            grid.InitStrategy(start_price, pos, 20000)
+        
+        return True
+    
     # --- Config and State Loading/Saving ---
-    def _load_watchlist_and_calculate_params(self):
-        # ... (Your existing _load_watchlist_and_calculate_params method)
-        # Make sure it populates self.strategy_params with GridStrategyParams instances
-        # And ensure GridStrategyParams includes primary_exchange, max_grids_up_config, max_grids_down_config
-        try:
-            with open(self.watchlist_file, 'r') as f: watchlist_data = json.load(f)
-        except Exception as e: print(f"Error loading watchlist: {e}"); watchlist_data = []
-
-        for item in watchlist_data:
-            symbol = item.get("symbol")
-            start_price = item.get("start_price") 
-            unique_tag = item.get("unique_tag", symbol) 
-            grid_price_types = item.get("grid_price_types", ["classic"])
-            proportions = item.get("proportions", [1.0])
-            cost_per_grids = item.get("cost_per_grids", [500])
-
-            if not all([symbol, start_price is not None]): # adr_abs can be 0
-                print(f"Skipping watchlist item {item.get('symbol', 'Unknown')} due to missing symbol or start_price.")
-                continue
-            unique_tag = 1
-            for grid_price_type in grid_price_types:
-                for proportion in proportions:
-                    for cost_per_grid in cost_per_grids: # cost不影响成交频率
-                        strategy_id = f"GRID_{unique_tag}_{symbol}"
-                        params = GridStrategy(self.api, symbol, start_price, cost_per_grid, proportion, grid_price_type, strategy_id, get_order_id=self.get_register_order_id_strategy_id, data_dir=self.data_dir)
-                        self.strategy_params[strategy_id] = params
-                        unique_tag += 1
+    def _load_watchlist_and_calculate_params(self, names):
+        strategy_config_map = {
+            "grid": {
+                "func": self._load_grid_strategies,
+                "filename": "/grid_config.json"
+            },
+        }
+        for name in names:
+            strategy_config = strategy_config_map.get(name, None)
+            if strategy_config:
+                filename = strategy_config.get("filename", "")
+                if filename:
+                    self.read_json_file(self.data_dir + name + filename, strategy_config.get("func"))
+                else:
+                    filepath = self.data_dir + name
+                    self.read_json_files_from_directory(filepath, strategy_config.get("func"))
+            else:
+                self._log(f"Error: Invalid Function for {name} when loading configure file.", level=1)
 
 
     def get_register_order_id_strategy_id(self, strategy_id: str) -> int:
@@ -82,50 +102,53 @@ class GridStrategyEngine(Engine):
         self.next_order_id_counter += 1
         return current_id
 
+    def _log(self, content, level: int = 0):
+        if level in [0, 1]:
+            print(f"{datetime.datetime.now()} {content}")
+        
+        
     def InitStrategy(self): # Renamed and made async
-        print(f"--- {self.strategy_name} Async Initialize starting ---")
-        print(f"Engine Start At {datetime.datetime.now()}")
+        self._log(f"Strategy Engine Initialize starting", level=1)
         if not self.api.isConnected():
             print("Error: IB API not connected. Abort init!")
             return False
         
+        self.is_running = True
+        self.positions = self.api.get_current_positions()
+        
         # 注册订单状态更新事件
         self.api.register_order_status_update_handler(self.handle_order_update_async)
         self.api.register_execution_fill_handler(self.handle_fill_async)
+        self._log(f"Event Register Done.", level=1)
 
         # 从文件中载入策略配置
-        self._load_watchlist_and_calculate_params() # Sync
-        # self._load_active_grid_cycles() # Sync, loads LGC objects
+        strategy_names = ["grid"]
+        self._load_watchlist_and_calculate_params(strategy_names) # Sync
 
+        self._log(f"Load Strategy Configure Files Done.", level=1)
         # Initialize order ID counter
         initial_ib_order_id = self.api.get_next_order_id() # Assuming this is a sync call in your IBapi
         if initial_ib_order_id is None:
-            print("Error: Could not get initial next valid order ID from IB API. Halting strategy init.")
+            self._log(f"Error: Could not get initial next valid order ID from IB API. Halting strategy init.", level=1)
             return False
         self.next_order_id_counter = initial_ib_order_id
-        print(f"Base OrderID for this session will start from: {self.next_order_id_counter}")
+        self._log(f"Initialize Order Id Done: {self.next_order_id_counter}.", level=1)
 
-        self.is_running = True
-
-        for strategy_id, params in self.strategy_params.items():
-            # print(f"Initializing orders for strategy: {strategy_id} ({params.symbol})")
-            asyncio.get_event_loop().run_until_complete(params.InitStrategy())
-
-        # self._save_active_grid_cycles()
-        print(f"--- {self.strategy_name} Async Initialize complete ---")
+        self._log(f"Strategy Engine Initialize Done.", level=1)
         return True
 
 
     async def handle_order_update_async(self, trade: Any, order_status: Any):
         if not self.is_running: return
+        order = common.convert_trade_to_gridorder(trade)
         # 根据order_id_strategy获取对应的策略
-        order_id = trade.order.orderId
-        strategy_id = self.order_id_strategy_id.get(order_id, "")
+        strategy_id = self.order_id_strategy_id.get(order.order_id, "")
         if not strategy_id: return
         params = self.strategy_params[strategy_id]
         if not params:
             return 
-        await params.update_order_status(trade, order_status)
+        
+        await params.update_order_status(order)
 
 
     async def handle_fill_async(self, trade: Any, fill: Any):
@@ -139,8 +162,7 @@ class GridStrategyEngine(Engine):
         2. (可选) 尝试取消所有在经纪商处的活动挂单 (这需要 self.api.cancel_order_by_id)。
         3. 统计今日所有订单情况，包括收益、手续费等等。
         """
-        print("Stopping Grid Strategy Engine")
-        print(f"Engine Stop At {datetime.datetime.now()}")
+        self._log(f"Strategy Engine Stop Running...", level=1)
         self.is_running = False
         
         # --- 统计今日所有订单情况 ---
@@ -165,6 +187,7 @@ class GridStrategyEngine(Engine):
         for strategy_id, params in self.strategy_params.items() or {}:
             self.strategy_result[strategy_id] = params.DoStop()
                 
+        self._log(f"All Strategies Stopped.", level=1)
         result = []
         for sid, item in self.strategy_result.items():
             result.append({"grid_type": item.get("grid_type", "classic"),
@@ -173,10 +196,151 @@ class GridStrategyEngine(Engine):
                            "net_profit": item.get("net_profit", 0)})
         # utils.show_figure(result)
         
+        self._log(f"Strategy Engine Stop Running Done.", level=1)
         return self.strategy_result
-
-    # _read_watchlist_raw can remain sync
-    def _read_watchlist_raw(self) -> List[Dict]:
+        
+    def read_json_file(self, filename: str, proc: Callable[[Dict[Any, Any]], bool]):
         try:
-            with open(self.watchlist_file, 'r') as f: return json.load(f)
-        except Exception: return []
+            with open(filename, 'r', encoding='utf-8') as file:
+                data = json.load(file)
+                if proc(data):
+                    self._log(f"成功载入策略配置文件: {filename}", level=1)
+                
+        except json.JSONDecodeError as e:
+            error_msg = f"JSON解析错误 - {filename}: {str(e)}"
+            self._log(f"Error: {error_msg}", level=1)
+            
+        except Exception as e:
+            error_msg = f"文件读取错误 - {filename}: {str(e)}"
+            self._log(f"Error: {error_msg}", level=1)
+        
+    def read_json_files_from_directory(self, directory_path: str, proc: Callable[[Dict[Any, Any]], bool]):
+        """
+        遍历指定目录下的所有JSON文件并读取内容
+        
+        参数:
+        directory_path: 要遍历的目录路径
+        
+        返回:
+        字典，键为文件名（不含扩展名），值为JSON内容
+        """
+        if not os.path.exists(directory_path):
+            raise FileNotFoundError(f"目录不存在: {directory_path}")
+        
+        if not os.path.isdir(directory_path):
+            raise NotADirectoryError(f"路径不是目录: {directory_path}")
+        
+        json_data = {}
+        errors = []
+        
+        # 遍历目录中的所有文件
+        for filename in os.listdir(directory_path):
+            if filename.lower().endswith('.json'):
+                file_path = os.path.join(directory_path, filename)
+                
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as file:
+                        data = json.load(file)
+                        if proc(data):
+                            print(f"成功读取: {filename}")
+                        
+                except json.JSONDecodeError as e:
+                    error_msg = f"JSON解析错误 - {filename}: {str(e)}"
+                    errors.append(error_msg)
+                    print(f"错误: {error_msg}")
+                    
+                except Exception as e:
+                    error_msg = f"文件读取错误 - {filename}: {str(e)}"
+                    errors.append(error_msg)
+                    print(f"错误: {error_msg}")
+        
+        # 如果有错误，打印汇总
+        if errors:
+            print(f"\n读取过程中发生了 {len(errors)} 个错误:")
+            for error in errors:
+                print(f"  - {error}")
+                
+
+    def validate_json_structure(self, data: Dict[str, Any], filename: str = "") -> bool:
+        """
+        验证JSON文件是否符合预期的结构
+        
+        参数:
+        data: JSON数据
+        filename: 文件名（用于错误提示）
+        
+        返回:
+        bool: 是否符合预期结构
+        """
+        try:
+            # 检查必需的顶级键
+            required_keys = ['config', 'profits', 'pending_orders']
+            for key in required_keys:
+                if key not in data:
+                    print(f"警告 - {filename}: 缺少必需的键 '{key}'")
+                    return False
+            
+            # 检查config结构
+            config = data['config']
+            config_required_keys = ['symbol', 'unique_tag', 'base_price', 'lower', 'upper', 'cost_per_grid', 'proportion']
+            for key in config_required_keys:
+                if key not in config:
+                    print(f"警告 - {filename}: config中缺少必需的键 '{key}'")
+                    return False
+            
+            # 检查profits是否为列表
+            if not isinstance(data['profits'], list):
+                print(f"警告 - {filename}: profits应该是列表类型")
+                return False
+            
+            # 检查pending_orders是否为列表
+            if not isinstance(data['pending_orders'], list):
+                print(f"警告 - {filename}: pending_orders应该是列表类型")
+                return False
+            
+            # 检查pending_orders中的订单结构
+            order_required_keys = ['symbol', 'action', 'lmt_price', 'shares', 'done_price', 'done_shares', 'status']
+            for i, order in enumerate(data['pending_orders']):
+                if not isinstance(order, dict):
+                    print(f"警告 - {filename}: pending_orders[{i}]应该是字典类型")
+                    return False
+                
+                for key in order_required_keys:
+                    if key not in order:
+                        print(f"警告 - {filename}: pending_orders[{i}]中缺少必需的键 '{key}'")
+                        return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"验证错误 - {filename}: {str(e)}")
+            return False
+
+    def read_and_validate_json_files(self, directory_path: str, validate: bool = True) -> Dict[str, Any]:
+        """
+        读取并验证JSON文件
+        
+        参数:
+        directory_path: 目录路径
+        validate: 是否验证文件结构
+        
+        返回:
+        字典，包含所有成功读取且验证通过的JSON数据
+        """
+        json_data = self.read_json_files_from_directory(directory_path)
+        
+        if validate:
+            print("\n开始验证文件结构...")
+            valid_data = {}
+            
+            for filename, data in json_data.items():
+                if self.validate_json_structure(data, filename):
+                    valid_data[filename] = data
+                    print(f"✓ {filename}: 结构验证通过")
+                else:
+                    print(f"✗ {filename}: 结构验证失败")
+            
+            print(f"\n验证结果: {len(valid_data)}/{len(json_data)} 个文件通过验证")
+            return valid_data
+        
+        return json_data

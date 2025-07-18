@@ -13,41 +13,6 @@ import pandas as pd
 # For ABC, let's try to use more generic type hints where possible,
 # or define simple data structures if needed by the ABC interface.
 
-# Simple data structures that could be used by the ABC if not relying on specific library types
-class GenericContract:
-    symbol: str
-    secType: str # e.g., STK, OPT, FUT, CASH
-    exchange: str
-    currency: str
-    primaryExchange: Optional[str] = None
-    conId: Optional[int] = None # Broker-specific ID
-    localSymbol: Optional[str] = None # Broker-specific symbol
-
-class GenericOrder:
-    orderId: int # Client-side order ID
-    permId: Optional[int] # Broker-assigned permanent ID
-    action: str # BUY, SELL
-    orderType: str # LMT, MKT, STP, etc.
-    totalQuantity: float
-    lmtPrice: Optional[float] = None
-    auxPrice: Optional[float] = None # For STP, TRAIL, etc.
-    tif: str # GTC, DAY, IOC, etc.
-    orderRef: Optional[str] = None # Client-side reference
-    status: Optional[str] = None # Filled, Submitted, Cancelled, etc.
-
-class GenericFill:
-    orderId: int
-    permId: Optional[int]
-    execId: str # Broker's execution ID
-    time: Any # Execution time (datetime or timestamp string)
-    shares: float
-    price: float
-    avgPrice: Optional[float] # Often same as price for a single fill
-    cumQty: Optional[float]
-    commission: float
-    commissionCurrency: str
-    realizedPNL: Optional[float] = None
-
 
 class BaseAPI(ABC):
     """
@@ -101,7 +66,7 @@ class BaseAPI(ABC):
     
 
     @abstractmethod
-    async def place_limit_order(self, contract: Any, action: str, quantity: float, 
+    async def place_limit_order(self, symbol: str, action: str, quantity: float, 
                                 limit_price: float, order_ref: str = "", tif: str = "GTC", 
                                 transmit: bool = True, outside_rth: bool = False,
                                 order_id_to_use: Optional[int] = None) -> Optional[Any]:
@@ -123,7 +88,7 @@ class BaseAPI(ABC):
 
     # --- Market & Account Data ---
     @abstractmethod
-    async def get_contract_details(self, symbol: str, exchange: str = "SMART", 
+    def get_contract_details(self, symbol: str, exchange: str = "SMART", 
                              currency: str = "USD", primary_exchange: Optional[str] = None) -> Optional[Any]:
         pass
 
@@ -141,7 +106,7 @@ class BaseAPI(ABC):
         pass
 
     @abstractmethod
-    async def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[Any]:  # List of position details
+    def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[Any]:  # List of position details
         """Fetches current account positions."""
         pass
 
