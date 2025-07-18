@@ -1,9 +1,7 @@
 #!/usr/bin/python3#!/usr/bin/python3
-import asyncio
+import datetime
 import sys
 import os
-import threading
-import time
 import signal
 from typing import Dict
 from datetime import timedelta
@@ -18,7 +16,6 @@ if __name__ == '__main__': # Only adjust path if running as script directly
         sys.path.insert(0, project_root)
 
 from apis.ibkr import IBapi
-from strategy.grid import *
 from strategy.engine import Engine
 from strategy.strategy_engine import GridStrategyEngine
 

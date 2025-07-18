@@ -14,7 +14,7 @@ if __name__ == '__main__': # Allow running/importing from different locations
 from apis.ibkr import IBapi
 from backtest.common import common
 from backtest.common.mockapi import MockApi
-from strategy.grid_new import GridStrategy
+from strategy.grid import GridStrategy
 from utils import utils
 
 SYMBOL = "NLY"
