@@ -75,4 +75,4 @@ venv.bak/
 
 # Personal config
 config.py # 如果你的配置文件包含敏感信息
-
+data/

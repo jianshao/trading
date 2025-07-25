@@ -3,17 +3,18 @@ import asyncio
 import datetime
 import json
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 from apis.api import BaseAPI
 from strategy import common
-from strategy.engine import Engine
+from strategy.strategy import Strategy
 from strategy.grid import GridStrategy
 
 WATCHLIST_FILE = "watchlist_grid_config.json"  # For symbols and their daily params
 
-class GridStrategyEngine(Engine):
+class GridStrategyEngine:
     def __init__(self, ib_api: BaseAPI, data_dir: str = "data"):
         self.strategy_name = "Grid Strategy"
         self.api = ib_api
@@ -48,19 +49,23 @@ class GridStrategyEngine(Engine):
             proportion = param.get("proportion", 0.015)
             cost_per_grid = param.get("cost_per_grid", 500)
             data_file = param.get('data_file')
+            do_optimize = param.get("do_optimize", False)
+            num_when_optimize = param.get('num_when_optimize', 1)
             
             strategy_id = f"GRID_{unique_tag}_{symbol}"
             grid = GridStrategy(self.api, strategy_id, symbol, 
                                     base_price, lower, upper, 
                                     cost_per_grid, proportion, 
                                     get_order_id=self.get_register_order_id_strategy_id,
+                                    do_optimize=do_optimize, num_when_optimize=num_when_optimize,
                                     data_file=self.data_dir + "grid/" + data_file)
             self.strategy_params[strategy_id] = grid
             
             start_price = param.get("start_price")
             pos = 0
             for position in self.positions:
-                if position.contract.symbol == grid.symbol:
+                # 只处理股票
+                if position.contract.secType == "STK" and position.contract.symbol == grid.symbol:
                     pos = position.position
             grid.InitStrategy(start_price, pos, 20000)
         
@@ -119,6 +124,7 @@ class GridStrategyEngine(Engine):
         # 注册订单状态更新事件
         self.api.register_order_status_update_handler(self.handle_order_update_async)
         self.api.register_execution_fill_handler(self.handle_fill_async)
+        self.api.register_disconnected_handler(self.handle_disconnect_event)
         self._log(f"Event Register Done.", level=1)
 
         # 从文件中载入策略配置
@@ -137,6 +143,22 @@ class GridStrategyEngine(Engine):
         self._log(f"Strategy Engine Initialize Done.", level=1)
         return True
 
+    async def handle_disconnect_event(self):
+        self.is_running = False
+        for i in range(5):
+            try:
+                if self.api.isConnected():
+                    self.api.disconnect()
+                    
+                await asyncio.sleep(3)
+                
+                await self.api.connect()
+                if self.api.isConnected():
+                    self.is_running = True
+                    return
+                
+            except Exception as e:
+                self._log(f"重连第{i}次失败：{e}")
 
     async def handle_order_update_async(self, trade: Any, order_status: Any):
         if not self.is_running: return

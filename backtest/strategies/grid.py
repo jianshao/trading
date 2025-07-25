@@ -42,6 +42,8 @@ class GridStrategyBT(bt.Strategy):
         ('max_buy_grids', 1),
         ('max_sell_grids', 1),
         ('start_buy', 100),
+        ('do_optimize', False),
+        ('num_when_optimize', 1),
         ('space_diff', 0.01)
     )
 
@@ -58,6 +60,7 @@ class GridStrategyBT(bt.Strategy):
         self.grid = GridStrategy(self.api, strategy_id, self.p.symbol, 
                                  self.p.base_price, self.p.lower_bound, self.p.upper_bound,
                                  self.p.base_cost, self.p.space_diff, self.p.spacing_ratio, self.p.position_sizing_ratio,
+                                 do_optimize=self.p.do_optimize, num_when_optimize=self.p.num_when_optimize,
                                  data_file=f"data/mock/strategies/grid/{self.p.symbol}.json")
 
 
@@ -181,17 +184,19 @@ if __name__ == '__main__':
     symbol = "TQQQ"
     cerebro.addstrategy(GridStrategyBT, 
                         symbol=symbol,
-                        base_price=80,
+                        base_price=60,
                         base_cost=1000,
                         position_sizing_ratio=0.00, # Increase shares by 5% each grid down
                         spacing_ratio=0.00, # Increase spacing by 5% each grid
-                        lower_bound=70,
-                        upper_bound=97,
-                        start_buy=300,
+                        lower_bound=34,
+                        upper_bound=93,
+                        start_buy=1000,
+                        do_optimize=True,
+                        num_when_optimize=3,
                         space_diff=0.01)
 
     # 3. Create a Data Feed (using your provided test data)
-    df = get_data(symbol, "2024-10-01", "2025-07-01")
+    df = get_data(symbol, "2024-01-01", "2025-07-01")
     # print(f"{df}")
     print(f"Total len: {len(df)}")
     
@@ -200,7 +205,7 @@ if __name__ == '__main__':
     cerebro.adddata(data_feed)
 
     # 4. Set our desired cash and commission
-    cerebro.broker.setcash(30000.0)
+    cerebro.broker.setcash(94000.0)
     # Example: 0.005 per share, with a minimum of $1.00 per trade
     cerebro.broker.setcommission(commission=0.005)
     cerebro.broker.setcommission(interest=0.0)

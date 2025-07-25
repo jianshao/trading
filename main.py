@@ -16,32 +16,40 @@ if __name__ == '__main__': # Only adjust path if running as script directly
         sys.path.insert(0, project_root)
 
 from apis.ibkr import IBapi
-from strategy.engine import Engine
+from strategy.strategy import Strategy
 from strategy.strategy_engine import GridStrategyEngine
 
 STRATEGY_GRID = "grid"
 
 is_running: bool = False
+PAPER_API = False
 
 # connect只能用同步的，使用异步的会出问题
 def GetApi() -> IBapi:
-    api = IBapi()
+    if PAPER_API:
+        api = IBapi(port=7497)
+    else:
+        api = IBapi(port=7496)
     if api.connect():
         return api
     return None
 
 # 初始所有化策略环境，必须等待初始化完成才能继续
 # 初始化时只能使用同步接口，否则会出现报错：This event loop is already running
-def InitStrategies(api: IBapi, strategies: Dict[str, Engine]) -> bool:
+def InitStrategies(api: IBapi, strategies: Dict[str, Strategy]) -> bool:
     # grid 策略
-    grid = GridStrategyEngine(api, "data/strategies/")
+    if PAPER_API:
+        filename = "data/paper/strategies/"
+    else:
+        filename = "data/real/strategies/"
+    grid = GridStrategyEngine(api, filename)
     grid.InitStrategy()
     strategies[STRATEGY_GRID] = grid
     
     return True
 
 
-def StopStrategies(strategies: Dict[str, any]):
+def StopStrategies(strategies: Dict[str, Strategy]):
     print("Stop all Strategies: ")
     if STRATEGY_GRID in strategies:
         grid = strategies[STRATEGY_GRID]

@@ -25,7 +25,7 @@ class GridOrder:
         self.shares = shares
         self.done_price = 0
         self.done_shares = 0
-        self.fee = 1.05
+        self.fee = 1.0
         self.status: OrderStatus = OrderStatus(status)
         self.apply_time = datetime.datetime.now()
         self.done_time = datetime.datetime.now()

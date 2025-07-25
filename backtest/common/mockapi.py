@@ -6,7 +6,6 @@ from ib_insync import Order, OrderStatus, Trade
 from matplotlib import pyplot as plt
 import pandas as pd
 from backtest.common import common
-from common.account import Account, Position
 import redis
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 from io import StringIO
@@ -166,4 +165,7 @@ class MockApi(BaseAPI):
         pass
         
     def register_open_order_snapshot_handler(self, handler: Callable[[Any, Any, Any], Coroutine[Any, Any, None]]):
+        pass
+
+    def register_disconnected_handler(self, handler: Callable[[], Coroutine[Any, Any, None]]):
         pass

@@ -133,3 +133,7 @@ class BaseAPI(ABC):
     @abstractmethod
     def register_open_order_snapshot_handler(self, handler: Callable[[Any, Any, Any], Coroutine[Any, Any, None]]):
         pass
+
+    @abstractmethod
+    def register_disconnected_handler(self, handler: Callable[[], Coroutine[Any, Any, None]]):
+        pass

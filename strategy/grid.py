@@ -12,6 +12,7 @@ from typing import Dict, List, Any, Optional, Tuple, Callable
 import pandas as pd
 
 from strategy.common import OrderStatus, GridOrder, LiveGridCycle
+from strategy.strategy import Strategy
 
 if __name__ == '__main__': # Allow running/importing from different locations
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +26,6 @@ from apis.api import BaseAPI
 PENDING_ORDERS_FILE_TPL = "{strategy_id}_pending_cycles.json" # For persisting active grid cycles
 # 是否使用优化选项
 DO_OPTIMIZE = True
-USING_COUNT = 100
 
 
 @dataclass
@@ -73,12 +73,13 @@ class GridUnit:
     def __str__(self):
         return "{" + f" @{self.buy_price} - @{self.sell_price}, quantity: {self.quantity}" + "}"
         
-class GridStrategy:
+class GridStrategy(Strategy):
     def __init__(self, api: BaseAPI, strategy_id, symbol: str,
                  base_price: float, lowwer: float, upper: float, # 网格上下限
                  cost_per_grid: float, space_propor: float = 0.01,
                  spacing_ratio: float = 0, # 按比例增大网格价差，1.0为价差不变
                  position_sizing_ratio: float = 0, # 按比例增加每网格成本，1.0为成本不变
+                 do_optimize: bool = False, num_when_optimize: int = 1,
                  get_order_id: Callable[[str], int] = None, data_file: str = "data/strategies/grid"): # For initial setup only
         self.data_file = data_file
         
@@ -92,6 +93,8 @@ class GridStrategy:
         self.upper_bound = upper
         self.space_propor = space_propor
         self.cost_per_grid = cost_per_grid  # 单网格成本
+        self.num_when_optimize = num_when_optimize  # 当开启优化选项时单次多买入或少卖出多少股
+        self.do_optimize = do_optimize  # 是否开启优化，开启优化后可以逐步建仓。
         self.price_growth_ratio = spacing_ratio # 网格价差增长的比例，1.0为不增长
         self.cost_growth_ratio = position_sizing_ratio # 每个网格股数增长比例，1为不变化
         self.primary_exchange = "NASDAQ"
@@ -101,17 +104,17 @@ class GridStrategy:
         self.cash = 0
         self.position = 0
         self.init_position = 0
+        
         # --- NEW: Dynamic Grid Generation ---
-        # This now holds tuples of (price, shares_at_this_price)
-        # We will generate separate lists for potential buy grids and sell grids
-        self.grid_definitions: Dict[Any, GridUnit] = {}
-
         # --- State Management (mostly unchanged, but now uses dynamic shares) ---
         # 运行时数据
+        self.grid_definitions: Dict[Any, GridUnit] = {}
         self.open_orders: Dict[Any, LiveGridCycle] = {}
         self.close_orders: Dict[Any, LiveGridCycle] = {}
         self.pending_orders: Dict[Any, GridOrder] = {}
         self.order_id_2_unit: Dict[Any, GridUnit] = {}
+        
+        self.optimize_shares = 0
         
         # 统计数据
         self.trade_logs = []
@@ -119,10 +122,8 @@ class GridStrategy:
         self.pending_sell_cost = 0
         self.pending_buy_count = 0
         self.pending_buy_cost = 0
-        self.today = ""
         
         self.completed_count = 0
-        self.total_pnl = 0
         self.net_profit = 0
         self.total_cost = 0
         
@@ -348,19 +349,26 @@ class GridStrategy:
                 self.order_id_2_unit[order.order_id] = unit
                 unit.open_order = order
             
-            
+    # 根据订单情况决定优化的股数，针对价值属性高的标的可以逐步建仓。
     def optimize(self, price, action):
         # 没有打开优化选项
-        if not DO_OPTIMIZE:
+        if not self.do_optimize:
             return 0
         
+        if action.upper() == "SELL":
+            return 0
+        
+        # 低于基础价格的卖出和高于基础价格的买入不触发优化
         if (action == "SELL" and price < self.base_price) or (action == "BUY" and price > self.base_price):
             return 0
         
+        self.optimize_shares += 1
         # 根据当前价格与基础价格的偏移比例使用随机控制，如果触发优化则多或少1股（目前是1股）。
-        prop = abs((price-self.base_price)/self.base_price)*100
+        # 选择的标的波动本身都比较小，直接使用偏移比例触发优化概率很低，扩大4倍
+        prop = abs((price-self.base_price)/self.base_price)*100*4
         if random.randint(1, 100) <= prop:
-            return 1
+            self.optimize_shares += self.num_when_optimize*100
+            return self.num_when_optimize
         return 0
     
     async def grid_buy(self, purpose: str, price: float, size: float) -> Optional[GridOrder]:
@@ -414,16 +422,13 @@ class GridStrategy:
         log_entry["gross_profit"] = gross_profit
         log_entry["net_profit"] = round(gross_profit - 2*close_order.fee, 2)
         
-        self.net_profit = round(log_entry["net_profit"] + self.net_profit, 2)
+        self.net_profit += log_entry["net_profit"]
         # print(f"net profit: {self.net_profit}, @{open_order.lmt_price} {open_order.shares} - @{close_order.lmt_price} {close_order.shares}={gross_profit} {log_entry['net_profit']}")
         self.completed_count += 1
         # unit.completed_count += 1
-        self.total_pnl = round(self.total_pnl + gross_profit, 2)
         # self.total_open_cost_time += round((cycle.open_done_time - cycle.open_apply_time))
         # self.total_close_cost_time += round((cycle.close_done_time - cycle.close_apply_time))
         self.trade_logs.append(log_entry)
-        # print(f"  LOGGED CYCLE for {self.strategy_id}: Open {log_entry['open_action']} @{log_entry['open_price']:.2f}, "
-        #       f"Close {log_entry['close_action']} @{log_entry['close_price']:.2f}. Net PNL: {log_entry['net_profit']:.2f}")
         return
 
         
@@ -565,6 +570,10 @@ class GridStrategy:
         return True
         
     
+    def Reconnect(self, **kwargs):
+        # 刷新api
+        self.api = kwargs.get("api", None)
+    
     # 策略初始化
     def InitStrategy(self, current_market_price, potision, cash):
         self.log(f"Init Strategy {self} Starting...", level=1)
@@ -590,8 +599,8 @@ class GridStrategy:
         # 使用开盘价激活网格
         self.maintain_active_grid_orders(current_market_price)
         
-        self.log(f" 基础价格：{self.base_price}, 价格上下限：{self.lower_bound} - {self.upper_bound}, 单网格成本：{self.cost_per_grid} 价差比例：{self.space_propor} 已激活数量：{len(self.grid_definitions.keys())}", level=1)
-        self.log(f" 初始持仓：{potision:.0f} 初始资金：{cash}", level=1)
+        self.log(f" 基础价格：{self.base_price}, 价格上下限：{self.lower_bound} - {self.upper_bound}, 单网格成本：{self.cost_per_grid} 价差比例：{self.space_propor} 总网格数：{len(self.grid_definitions.keys())}", level=1)
+        self.log(f" 初始持仓：{potision:.0f} 初始资金：{cash} 是否开启优化：{self.do_optimize} 优化股数：{self.num_when_optimize}", level=1)
         self.log(f"Init Strategy {self} Completed.", level=1)
         return 
 
@@ -727,8 +736,10 @@ class GridStrategy:
                     old_unit = GridUnit.from_dict(unit)
                     # 新旧网格可能不一致，使用买入价去匹配
                     curr_unit = self._find_the_unit(old_unit.buy_price, True)
-                    # 如果存在建仓单，重新提交，并更新到现有网格中
-                    if old_unit.open_order:
+                    if not curr_unit:
+                        continue
+                    # 如果存在建仓单，重新提交，并更新到现有网格中。网格内已有建仓单的不再提交挂单
+                    if old_unit.open_order and not curr_unit.open_order:
                         old_open_order = old_unit.open_order
                         self.log(f" Order From File: {old_open_order}", level=0)
                         # 已经成交的订单处于统计时考虑也会放在文件中
@@ -745,7 +756,7 @@ class GridStrategy:
                             curr_unit.open_order = old_open_order
                     
                     # 平仓单同理
-                    if old_unit.close_order:
+                    if old_unit.close_order and not curr_unit.close_order:
                         old_close_order = old_unit.close_order
                         if old_close_order.status != OrderStatus.Completed:
                             if old_close_order.isbuy():
@@ -781,7 +792,7 @@ class GridStrategy:
             "init_position": self.init_position,
             "curr_position": self.position,
             "completed_count": self.completed_count,
-            "profit": self.net_profit,
+            "profit": round(self.net_profit, 2),
         })
         data = {
             "profits": self.profit_logs,
@@ -819,7 +830,7 @@ class GridStrategy:
         }
         
         # self.log(f"Unit Count: {[{unit.buy_price: unit.completed_count} for unit in self.grid_definitions.values() if unit.completed_count != 0]}", level=0)
-        return {"spacing_ratio": self.price_growth_ratio, "position_sizing_ratio": self.cost_growth_ratio, "net_profit": self.net_profit}
+        return {"spacing_ratio": self.price_growth_ratio, "position_sizing_ratio": self.cost_growth_ratio, "net_profit": round(self.net_profit, 2)}
 
     def daily_summy(self, date_str: str) -> str:
         pending_buy_order_count_map = {}
