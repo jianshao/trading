@@ -636,12 +636,17 @@ class GridStrategy(Strategy):
 
         unit = self.order_id_2_unit[order.order_id]
         if order.status in [OrderStatus.Completed]:
-            # 卖出时shares是负数，买入时是正数
             # 订单成交更新持仓和成本
             # 统计数据要使用成交价和成交数量
-            self.position += order.done_shares
-            self.cash -= order.done_price*order.done_shares
-            self.total_cost += order.done_price * order.done_shares
+            if order.isbuy():
+                self.position += order.done_shares
+                self.cash -= order.done_price*order.done_shares
+                self.total_cost += order.done_price * order.done_shares
+            else:
+                self.position -= order.done_shares
+                self.cash += order.done_price*order.done_shares
+                self.total_cost -= order.done_price * order.done_shares
+                
             
             if order.isbuy():
                 self.log(f'BUY EXECUTED, Lmt Price: {order.lmt_price:.2f}, Done Price: {order.done_price} Qty: {order.done_shares:.0f}', level=0)
