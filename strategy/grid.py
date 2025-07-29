@@ -132,7 +132,7 @@ class GridStrategy(Strategy):
         
 
     def __str__(self):
-        return (f"GridParams(ID={self.strategy_id}, Sym={self.symbol}, Space={self.space_propor:.2f} Cost={self.cost_per_grid:.2f})")
+        return (f"GridParams(ID={self.strategy_id}, Sym={self.symbol}, Space={self.space_propor:.3f} Cost={self.cost_per_grid:.2f})")
     
     def generate_grid_upward(self, base_price, base_cost, grid_price_ratio, price_growth_ratio, cost_growth_ratio):
         """

@@ -5,6 +5,7 @@ import os
 import signal
 from typing import Dict
 from datetime import timedelta
+import argparse
 
 if __name__ == '__main__': # Only adjust path if running as script directly
     # This assumes backtester_main.py is in a subdirectory (e.g., 'scripts')
@@ -22,11 +23,10 @@ from strategy.strategy_engine import GridStrategyEngine
 STRATEGY_GRID = "grid"
 
 is_running: bool = False
-PAPER_API = False
 
 # connect只能用同步的，使用异步的会出问题
-def GetApi() -> IBapi:
-    if PAPER_API:
+def GetApi(real: bool) -> IBapi:
+    if not real:
         api = IBapi(port=7497)
     else:
         api = IBapi(port=7496)
@@ -36,9 +36,9 @@ def GetApi() -> IBapi:
 
 # 初始所有化策略环境，必须等待初始化完成才能继续
 # 初始化时只能使用同步接口，否则会出现报错：This event loop is already running
-def InitStrategies(api: IBapi, strategies: Dict[str, Strategy]) -> bool:
+def InitStrategies(api: IBapi, strategies: Dict[str, Strategy], real: bool) -> bool:
     # grid 策略
-    if PAPER_API:
+    if not real:
         filename = "data/paper/strategies/"
     else:
         filename = "data/real/strategies/"
@@ -64,6 +64,9 @@ def HandleExit(signum, frame):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='命令行参数')
+    parser.add_argument('account', type=str, choices=["real", "paper"], help='启动账户类型, real-真实账户、 paper-模拟账户')
+    args = parser.parse_args()
     # 注册信号退出事件
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, HandleExit)
@@ -73,11 +76,11 @@ if __name__ == "__main__":
     print(f"******************************************** Auto Trading System Starting ********************************************")
     try:
         # 组装、连接api，使api与策略解耦
-        api = GetApi()
+        api = GetApi(args.account == 'real')
         if not api:
             print("System Error: Connect to IBKR FAIL, Aborting.....")
         else:
-            if not InitStrategies(api, strategiesMap):
+            if not InitStrategies(api, strategiesMap, args.account == 'real'):
                 print("Initializing Strategies Failed, Aborting...")
             else:
                 # 使用纯同步方式，否则会有以下问题
