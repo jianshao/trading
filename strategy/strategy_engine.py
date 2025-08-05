@@ -51,6 +51,7 @@ class GridStrategyEngine:
             data_file = param.get('data_file')
             do_optimize = param.get("do_optimize", False)
             num_when_optimize = param.get('num_when_optimize', 1)
+            cost = param.get("cost", 10000)  # Default cost if not provided
             
             strategy_id = f"GRID_{unique_tag}_{symbol}"
             grid = GridStrategy(self.api, strategy_id, symbol, 
@@ -61,13 +62,16 @@ class GridStrategyEngine:
                                     data_file=self.data_dir + "grid/" + data_file)
             self.strategy_params[strategy_id] = grid
             
-            start_price = param.get("start_price")
-            pos = 0
+            pos = 0   # 假设初始现金为10000
             for position in self.positions:
                 # 只处理股票
                 if position.contract.secType == "STK" and position.contract.symbol == grid.symbol:
                     pos = position.position
-            grid.InitStrategy(start_price, pos, 20000)
+                    cost -= position.avgCost * pos
+                    break
+
+            start_price = param.get("start_price")
+            grid.InitStrategy(start_price, pos, round(cost, 2))
         
         return True
     
