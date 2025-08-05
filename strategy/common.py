@@ -48,7 +48,7 @@ class GridOrder:
             "fee": self.fee,
             "status": self.status.name,  # Store as string for readability
             "apply_time": self.apply_time.isoformat(),
-            "done_time": self.done_time.isoformat(),
+            "done_time": self.done_time.isoformat() if self.done_time else "",
         }
 
     @classmethod
@@ -65,7 +65,7 @@ class GridOrder:
         obj.done_shares = d["done_shares"]
         obj.fee = d["fee"]
         obj.apply_time = datetime.datetime.fromisoformat(d["apply_time"])
-        obj.done_time = datetime.datetime.fromisoformat(d["done_time"])
+        obj.done_time = datetime.datetime.fromisoformat(d["done_time"]) if d["done_time"] else None
         return obj
         
 
