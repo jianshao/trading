@@ -150,7 +150,7 @@ def get_data(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     data_list = []
     
     all_data = pd.DataFrame(data_list)
-    api = IBapi()
+    api = IBapi(port=7496, client_id=3)
     api.connect()
     mockApi = MockApi(ib_api=api)
     end_dates = utils.get_us_trading_days(start_date, end_date)
@@ -181,19 +181,19 @@ if __name__ == '__main__':
     
     # for param in params:
         # 2. Add the strategy
-    symbol = "TQQQ"
+    symbol = "NLY"
     cerebro.addstrategy(GridStrategyBT, 
                         symbol=symbol,
-                        base_price=60,
+                        base_price=19,
                         base_cost=1000,
                         position_sizing_ratio=0.00, # Increase shares by 5% each grid down
                         spacing_ratio=0.00, # Increase spacing by 5% each grid
-                        lower_bound=34,
-                        upper_bound=93,
+                        lower_bound=17,
+                        upper_bound=21.5,
                         start_buy=1000,
                         do_optimize=True,
                         num_when_optimize=3,
-                        space_diff=0.01)
+                        space_diff=0.005)
 
     # 3. Create a Data Feed (using your provided test data)
     df = get_data(symbol, "2024-01-01", "2025-01-01")

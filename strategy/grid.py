@@ -30,8 +30,9 @@ DO_OPTIMIZE = True
 
 @dataclass
 class GridUnit:
-    buy_price: float
-    sell_price: float
+    price: float
+    # buy_price: float
+    # sell_price: float
     quantity: float
     open_order: Optional['GridOrder'] = None
     close_order: Optional['GridOrder'] = None
@@ -40,8 +41,9 @@ class GridUnit:
     def to_dict(self) -> Dict[str, Any]:
         """将 GridUnit 对象转换为字典"""
         return {
-            'buy_price': self.buy_price,
-            'sell_price': self.sell_price,
+            # 'buy_price': self.buy_price,
+            # 'sell_price': self.sell_price,
+            'price': self.price,
             'quantity': self.quantity,
             'open_order': self.open_order.to_dict() if self.open_order else None,
             'close_order': self.close_order.to_dict() if self.close_order else None,
@@ -62,8 +64,9 @@ class GridUnit:
             close_order = GridOrder.from_dict(data['close_order'])
         
         return cls(
-            buy_price=data['buy_price'],
-            sell_price=data['sell_price'],
+            price=data['price'],
+            # buy_price=data['buy_price'],
+            # sell_price=data['sell_price'],
             quantity=data['quantity'],
             open_order=open_order,
             close_order=close_order,
@@ -71,7 +74,8 @@ class GridUnit:
         )
         
     def __str__(self):
-        return "{" + f" @{self.buy_price} - @{self.sell_price}, quantity: {self.quantity}" + "}"
+        # return "{" + f" @{self.buy_price} - @{self.sell_price}, quantity: {self.quantity}" + "}"
+        return "{" + f" @{self.price}, quantity: {self.quantity}" + "}"
         
 class GridStrategy(Strategy):
     def __init__(self, api: BaseAPI, strategy_id, symbol: str,
@@ -165,7 +169,7 @@ class GridStrategy(Strategy):
             quantity = current_cost / current_buy_price
             
             # 创建网格字典
-            grids.append(GridUnit(round(current_buy_price, 2), round(sell_price, 2), int(quantity)))
+            grids.append(GridUnit(round(current_buy_price, 2), int(quantity)))
             
             # 下一个网格的买入价格 = 当前网格的卖出价格
             current_buy_price = sell_price
@@ -233,7 +237,7 @@ class GridStrategy(Strategy):
             quantity = current_cost / buy_price
             
             # 创建网格字典
-            grids.append(GridUnit(round(buy_price, 2), round(current_sell_price, 2), int(quantity)))
+            grids.append(GridUnit(round(buy_price, 2), int(quantity)))
             
             # 下一个网格的卖出价格 = 当前网格的买入价格
             current_sell_price = buy_price
@@ -292,9 +296,9 @@ class GridStrategy(Strategy):
         
         # 合并所有网格，按价格从低到高排序
         all_grids = result['down_grids'] + result['up_grids']
-        all_grids.sort(key=lambda x: x.buy_price)
+        all_grids.sort(key=lambda x: x.price)
         for grid in all_grids:
-            self.grid_definitions[grid.buy_price] = grid
+            self.grid_definitions[grid.price] = grid
         
 
     # 只会提交建仓单，或取消建仓单。维护网格核心区（即当前成交价的上下各一个网格，不包括当前网格）。
@@ -311,30 +315,39 @@ class GridStrategy(Strategy):
                 reverse=True
             )
 
+        self.log(f"Target Sell Levels: {target_buy_levels}", level=0)
         for price in target_buy_levels:
             unit = self.grid_definitions[price]
             # 当前网格不是空闲的
             # if unit.open_order_ids or unit.close_order_ids:
             #     continue
+            # self.log(f"Checking unit {unit} for buy order: {unit.open_order} 000", level=1)
             if unit.open_order:
                 continue
+            # self.log(f"Checking unit {unit} for buy order at price {unit.price} 111", level=1)
             # 现有资金仍然可以挂买单
-            if round(self.pending_buy_cost + unit.quantity * unit.buy_price, 2) > round(self.cash):
+            if round(self.pending_buy_cost + unit.quantity * unit.price, 2) > round(self.cash):
                 continue
-            
-            order = asyncio.get_event_loop().run_until_complete(self.grid_buy(purpose="OPEN", price=unit.buy_price, size=unit.quantity))
+            # self.log(f"Checking unit {unit} for buy order at price {unit.price} 222", level=1)
+            order = asyncio.get_event_loop().run_until_complete(self.grid_buy(purpose="OPEN", price=unit.price, size=unit.quantity))
             if order:
                 # self.log(f"Price {unit.buy_price:.2f} is in core buy zone and free. Placing BUY order for {unit} {order.order_id} shares.", level=1)
                 self.order_id_2_unit[order.order_id] = unit
                 unit.open_order = order
                 # self.grid_definitions[unit.buy_price].open_order_ids.append(order.order_id)
+            # self.log(f"Checking unit {unit} for buy order at price {unit.price} 333", level=1)
             
         
         # 取当前价格的高一网格
+        # target_sell_levels = sorted(
+        #         [unit.buy_price for unit in self.grid_definitions.values() if unit.sell_price > current_price]
+        #     )
+        
         target_sell_levels = sorted(
-                [unit.buy_price for unit in self.grid_definitions.values() if unit.sell_price > current_price]
+                [price for price in self.grid_definitions.keys() if price > current_price]
             )
         
+        self.log(f"Target Buy Levels: {target_sell_levels}", level=0)
         for price in target_sell_levels:
             unit = self.grid_definitions[price]
             if unit.open_order:
@@ -342,7 +355,7 @@ class GridStrategy(Strategy):
             if self.pending_sell_count + unit.quantity > self.position:
                 continue
             
-            order = asyncio.get_event_loop().run_until_complete(self.grid_sell(purpose="OPEN", price=unit.sell_price, size=unit.quantity))
+            order = asyncio.get_event_loop().run_until_complete(self.grid_sell(purpose="OPEN", price=unit.price, size=unit.quantity))
             if order:
                 # self.log(f"Price {unit.sell_price:.2f} is in core sell zone and free. Placing SELL order for {unit} {order.order_id} shares.", level=1)
                 # self.pending_orders[order.order_id] = order
@@ -382,7 +395,7 @@ class GridStrategy(Strategy):
         self.pending_buy_cost = round(self.pending_buy_cost + abs(cost), 2)
         order = await self.api.place_limit_order(self.symbol, "BUY", quantity=size, limit_price=price, order_id_to_use=order_id)
         if order:
-            self.log(f"Place BUY order, Price: {price:.2f}, Qty: {size} Id: {order.order_id}")
+            self.log(f"Place BUY order, Price: {price:.2f}, Qty: {size} Id: {order.order_id}", level=0)
         return order
       
     async def grid_sell(self, purpose: str, price: float, size: float) -> Optional[GridOrder]:
@@ -394,7 +407,7 @@ class GridStrategy(Strategy):
         self.pending_sell_cost = round(self.pending_sell_cost + abs(price * size), 2)
         sell_order = await self.api.place_limit_order(self.symbol, "SELL", quantity=size, limit_price=price, order_id_to_use=order_id)
         if sell_order:
-            self.log(f"Place SELL order, Price: {price:.2f}, Qty: {size} Id: {sell_order.order_id}")
+            self.log(f"Place SELL order, Price: {price:.2f}, Qty: {size} Id: {sell_order.order_id}", level=0)
         return sell_order
 
     
@@ -417,13 +430,16 @@ class GridStrategy(Strategy):
             # "fee": cycle.open_fee + cycle.close_fee
         }
         
+        # 计算净利润
         self.log(f"open_order: {open_order}, close_order: {close_order}", level=0)
         gross_profit = abs(round((close_order.done_price - open_order.done_price) * close_order.done_shares, 2))
         log_entry["gross_profit"] = gross_profit
-        log_entry["net_profit"] = round(gross_profit - 2*close_order.fee, 2)
+        net_profit = round(gross_profit - 2*close_order.fee, 2)
+        log_entry["net_profit"] = net_profit
         
-        self.net_profit += log_entry["net_profit"]
-        # print(f"net profit: {self.net_profit}, @{open_order.lmt_price} {open_order.shares} - @{close_order.lmt_price} {close_order.shares}={gross_profit} {log_entry['net_profit']}")
+        self.log(f"GRID CYCLE ({'BUY-SELL' if open_order.isbuy() else 'SELL-BUY'}) COMPLETED for grid @{open_order.lmt_price:.2f} - @{close_order.lmt_price:.2f} {net_profit}", level=0)
+        
+        self.net_profit += net_profit
         self.completed_count += 1
         # unit.completed_count += 1
         # self.total_open_cost_time += round((cycle.open_done_time - cycle.open_apply_time))
@@ -588,7 +604,7 @@ class GridStrategy(Strategy):
         # # 计算并生成网格列表
         self._generate_dynamic_grids(self.base_price) # New method to generate grids based on params
         self.log(f"Strategy Initialized with Dynamic Grids.", level=0)
-        self.log(f"  Grids (price: shares): { {round(k,2):v.__str__() for k,v in self.grid_definitions.items()} }", level=0)
+        self.log(f"  Grids (price: shares): { {k:v.__str__() for k,v in self.grid_definitions.items()} }", level=0)
         
         # 从文件中载入未完成的历史平仓单
         self._load_active_grid_cycles()
@@ -606,7 +622,7 @@ class GridStrategy(Strategy):
 
     def log(self, txt, level=0):
         """ Logging function for this strategy"""
-        if level in [1]:
+        if level > 0:
             print(f'{datetime.datetime.now()} {txt}')
 
     def _find_the_unit(self, price: float, isbuy: bool):
@@ -619,6 +635,32 @@ class GridStrategy(Strategy):
                 return unit
         return None
 
+    # 查找当前网格的下一个网格，如果当前网格是买入网格，则返回对应的卖出网格；如果当前网格是卖出网格，则返回对应的买入网格。
+    def _find_next_unit(self, curr_price: float, isbuy: bool) -> Optional[GridUnit]:
+        """
+        Returns the GridUnit for the given price and action (buy/sell).
+        If no unit found, returns None.
+        """
+        # 当前网格是买入网格，找到对应的卖出网格
+        if isbuy:
+            # 找到当前价格的下一个网格
+            prices = sorted(
+                [price for price in self.grid_definitions.keys() if price > curr_price]
+            )
+            if prices:
+                return self.grid_definitions[prices[0]]
+        else:
+            # 找到当前价格的上一个网格
+            # 只考虑当前价格以上的网格
+            # 这里curr_price是当前价格，price是网格的买入价格
+            prices = sorted(
+                [price for price in self.grid_definitions.keys() if price < curr_price],
+                reverse=True
+            )
+            if prices:
+                return self.grid_definitions[prices[0]]
+        return None
+    
     # 策略下的订单状态更新
     async def update_order_status(self, order: GridOrder):
         """
@@ -629,7 +671,6 @@ class GridStrategy(Strategy):
             return
         
         self.log(f"Reciver order: {order.order_id} {order.action} {order.lmt_price} {order.shares} {order.status}", level=0)
-        # 成交价可能与限价不一样，更新对应网格的状态要用限价
         if order.order_id not in self.order_id_2_unit.keys():
             self.log(f"unknown order ref: {order.order_id}.")
             return 
@@ -647,7 +688,8 @@ class GridStrategy(Strategy):
                 self.cash += order.done_price*order.done_shares
                 self.total_cost -= order.done_price * order.done_shares
                 
-            
+            # 成交价可能与限价不一样，更新对应网格的状态要用限价
+            next_unit = self._find_next_unit(order.lmt_price, order.isbuy())
             if order.isbuy():
                 self.log(f'BUY EXECUTED, Lmt Price: {order.lmt_price:.2f}, Done Price: {order.done_price} Qty: {order.done_shares:.0f}', level=0)
                 self.pending_buy_count -= abs(order.done_shares)
@@ -657,26 +699,27 @@ class GridStrategy(Strategy):
                 if unit.open_order and order.order_id == unit.open_order.order_id:
                     # 一定要记得刷新建仓单，否则统计时拿不到建仓单的成交价
                     unit.open_order = order
-                    sell_order = await self.grid_sell(purpose="CLOSE", price=unit.sell_price, size=unit.quantity)
+                    # 使用对应的网格提交卖单
+                    sell_order = await self.grid_sell(purpose="CLOSE", price=next_unit.price, size=next_unit.quantity)
                     if sell_order:
-                        self.order_id_2_unit[sell_order.order_id] = unit
+                        self.order_id_2_unit[sell_order.order_id] = next_unit
                         # 记录平仓单
-                        if unit.close_order:
-                            self.api.cancel_order(unit.close_order)
-                        unit.close_order = sell_order
+                        if next_unit.close_order:
+                            self.log(f"Canceling existing close order: {next_unit.close_order.order_id} @{next_unit.close_order.lmt_price} {next_unit.close_order.shares} shares", level=1)
+                            self.api.cancel_order(next_unit.close_order)
+                        next_unit.close_order = sell_order
+                        # 更新当前网格状态
                         
                 elif unit.close_order and order.order_id == unit.close_order.order_id:
                     # 盈利统计
-                    profit = abs(round((unit.sell_price-unit.buy_price)*unit.quantity, 2))
-                    self.log(f"GRID CYCLE (SELL-BUY) COMPLETED for grid @{unit.sell_price:.2f} - @{unit.buy_price:.2f} {profit}", level=0)
-                    self._log_completed_trade(unit.open_order, order)
+                    self._log_completed_trade(next_unit.open_order, order)
                     
                     # 重新开仓
-                    sell_order = await self.grid_sell(purpose="CLOSE", price=unit.sell_price, size=unit.quantity)
+                    sell_order = await self.grid_sell(purpose="CLOSE", price=next_unit.price, size=next_unit.quantity)
                     if sell_order:
                         unit.close_order = None
-                        unit.open_order = sell_order
-                        self.order_id_2_unit[sell_order.order_id] = unit
+                        next_unit.open_order = sell_order
+                        self.order_id_2_unit[sell_order.order_id] = next_unit
 
             else:
                 self.pending_sell_count -= abs(order.done_shares)
@@ -684,24 +727,23 @@ class GridStrategy(Strategy):
                 
                 self.log(f'SELL EXECUTED, LmtPrice: {order.lmt_price} DonePrice: {order.done_price:.2f}, Qty: {order.done_shares:.0f} Id: {order.order_id}', level=0)
                 if unit.open_order and  order.order_id == unit.open_order.order_id:
+                    unit.open_order = order
                     # 建仓单成交，提交平仓单
-                    buy_order = await self.grid_buy(purpose="CLOSE", price=unit.buy_price, size=unit.quantity)
+                    buy_order = await self.grid_buy(purpose="CLOSE", price=next_unit.price, size=next_unit.quantity)
                     if buy_order:
-                        self.order_id_2_unit[buy_order.order_id] = unit
-                        if unit.close_order:
-                            self.api.cancel_order(unit.close_order)
-                        unit.close_order = buy_order
-                        unit.open_order = order
+                        self.order_id_2_unit[buy_order.order_id] = next_unit
+                        if next_unit.close_order:
+                            self.log(f"Canceling existing close order: {next_unit.close_order.order_id} @{next_unit.close_order.lmt_price} {next_unit.close_order.shares} shares", level=1)
+                            self.api.cancel_order(next_unit.close_order)
+                        next_unit.close_order = buy_order
                     
                 elif unit.close_order and order.order_id == unit.close_order.order_id:
-                    profit = abs(round((unit.sell_price-unit.buy_price)*order.done_shares, 2))
-                    self.log(f"GRID CYCLE (BUY-SELL) COMPLETED for grid @{unit.buy_price:.2f} - @{unit.sell_price} {profit}", level=0)
-                    self._log_completed_trade(unit.open_order, order)
+                    self._log_completed_trade(next_unit.open_order, order)
                     
-                    buy_order = await self.grid_buy(purpose="CLOSE", price=unit.buy_price, size=unit.quantity)
+                    buy_order = await self.grid_buy(purpose="CLOSE", price=next_unit.price, size=next_unit.quantity)
                     if buy_order:
-                        self.order_id_2_unit[buy_order.order_id] = unit
-                        unit.open_order = buy_order
+                        self.order_id_2_unit[buy_order.order_id] = next_unit
+                        next_unit.open_order = buy_order
                         unit.close_order = None
                 
             # 成交价可能与提交的限价不一样，此处要以成交价刷新网格
@@ -740,7 +782,7 @@ class GridStrategy(Strategy):
                     # 将网格单元转换成结构体
                     old_unit = GridUnit.from_dict(unit)
                     # 新旧网格可能不一致，使用买入价去匹配
-                    curr_unit = self._find_the_unit(old_unit.buy_price, True)
+                    curr_unit = self._find_the_unit(old_unit.price, True)
                     if not curr_unit:
                         continue
                     # 如果存在建仓单，重新提交，并更新到现有网格中。网格内已有建仓单的不再提交挂单
@@ -809,18 +851,17 @@ class GridStrategy(Strategy):
         except Exception as e:
             print(f"Error saving active grid cycles for {self.strategy_id} to {file_path}: {e}")
 
-    def DoStop(self) -> Any:
+    def DoStop(self):
         self.log(f"\nStop Strategy: {self} ------", level=1)
         self._save_active_grid_cycles()
-        # 取消所有已提交的订单
-        for price, unit in self.grid_definitions.items():
+        cancel_tasks = []
+        for unit in self.grid_definitions.values():
             if unit.open_order:
-                self.api.cancel_order(unit.open_order)
+                cancel_tasks.append(self.api.cancel_order(unit.open_order))
             if unit.close_order:
-                self.api.cancel_order(unit.close_order)
-        
-        # 等待几秒，等待取消订单操作处理完成。
-        time.sleep(2)
+                cancel_tasks.append(self.api.cancel_order(unit.close_order))
+        # await asyncio.gather(*cancel_tasks)
+        time.sleep(1)  # 等待订单取消完成
 
         if self.completed_count > 0:
             # self.log(f"Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Avg: {round(self.net_profit/self.completed_count, 2)} AvgTimeCost: open({round(self.total_open_cost_time/self.completed_count, 2)}) close({round(self.total_close_cost_time/self.completed_count, 2)})")
@@ -857,4 +898,3 @@ class GridStrategy(Strategy):
             avg = round(self.net_profit/self.completed_count, 2)
         return f"Completed: {self.completed_count:>3}, Profit: {round(self.net_profit, 2):>7.2f}, Pending: Buy({self.pending_buy_count:>3}, {self.pending_buy_cost:>8.2f}) Sell({self.pending_sell_count:>3}, {self.pending_sell_cost:>8.2f})"
         # return f"Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Avg: {avg} Pending: Buy({self.pending_buy_count, self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})"
-        
