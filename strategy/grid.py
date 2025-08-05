@@ -160,9 +160,7 @@ class GridStrategy(Strategy):
         current_price_ratio = grid_price_ratio
         
         while True:
-            # 计算当前网格的卖出价格
-            sell_price = current_buy_price * (1 + current_price_ratio)
-            if sell_price > self.upper_bound:
+            if current_buy_price > self.upper_bound:
                 break
             
             # 计算当前网格的股数
@@ -171,8 +169,9 @@ class GridStrategy(Strategy):
             # 创建网格字典
             grids.append(GridUnit(round(current_buy_price, 2), int(quantity)))
             
+            # 计算当前网格的卖出价格
             # 下一个网格的买入价格 = 当前网格的卖出价格
-            current_buy_price = sell_price
+            current_buy_price = current_buy_price * (1 + current_price_ratio)
             
             # 下一个网格的成本增长
             current_cost = current_cost * (1 + cost_growth_ratio)
