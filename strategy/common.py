@@ -28,7 +28,7 @@ class GridOrder:
         self.fee = 0.35
         self.status: OrderStatus = OrderStatus(status)
         self.apply_time = datetime.datetime.now()
-        self.done_time = datetime.datetime.now()
+        self.done_time = None
     
     def __str__(self):
         return f"symbol:{self.symbol} action:{self.action} price:({round(self.lmt_price, 2)}, {round(self.done_price, 2)}) shares:({self.shares}, {self.done_shares}) status: {self.status}"
