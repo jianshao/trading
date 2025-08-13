@@ -33,11 +33,7 @@ class GridStrategyEngine:
         
         self.is_running = False
         self.next_order_id_counter: Optional[int] = None
-        self.trade_log_df = pd.DataFrame(columns=[
-            "Timestamp", "StrategyID", "Symbol", "ActionType", 
-            "Price1", "Price2", "Shares", "GrossProfit", "Fees", "NetProfit", 
-            "OrderRef1", "OrderRef2"
-        ])
+
 
     def _load_grid_strategies(self, params: List[Dict[Any, Any]]) -> bool:
         for param in params:

@@ -682,17 +682,22 @@ class GridStrategy(Strategy):
                 self.position += order.done_shares
                 self.cash -= order.done_price*order.done_shares
                 self.total_cost += order.done_price * order.done_shares
+                
+                self.pending_buy_count -= abs(order.done_shares)
+                self.pending_buy_cost = round(self.pending_buy_cost - abs(order.done_shares * order.done_price), 2)
             else:
                 self.position -= order.done_shares
                 self.cash += order.done_price*order.done_shares
                 self.total_cost -= order.done_price * order.done_shares
                 
+                self.pending_sell_count -= abs(order.done_shares)
+                self.pending_sell_cost = round(self.pending_sell_cost - abs(order.done_shares * order.done_price), 2)
+                
+                
             # 成交价可能与限价不一样，更新对应网格的状态要用限价
             next_unit = self._find_next_unit(order.lmt_price, order.isbuy())
             if order.isbuy():
                 self.log(f'BUY EXECUTED, Lmt Price: {order.lmt_price:.2f}, Done Price: {order.done_price} Qty: {order.done_shares:.0f}', level=0)
-                self.pending_buy_count -= abs(order.done_shares)
-                self.pending_buy_cost = round(self.pending_buy_cost - abs(order.done_shares * order.done_price), 2)
             
                 # 找到对应网格，提交使用的限价一定是网格的买入价格
                 if unit.open_order and order.order_id == unit.open_order.order_id:
@@ -721,8 +726,6 @@ class GridStrategy(Strategy):
                         self.order_id_2_unit[sell_order.order_id] = next_unit
 
             else:
-                self.pending_sell_count -= abs(order.done_shares)
-                self.pending_sell_cost = round(self.pending_sell_cost - abs(order.done_shares * order.done_price), 2)
                 
                 self.log(f'SELL EXECUTED, LmtPrice: {order.lmt_price} DonePrice: {order.done_price:.2f}, Qty: {order.done_shares:.0f} Id: {order.order_id}', level=0)
                 if unit.open_order and  order.order_id == unit.open_order.order_id:
@@ -831,6 +834,11 @@ class GridStrategy(Strategy):
         for unit in self.grid_definitions.values():
             if unit.open_order or unit.close_order:
                 active_to_save.append(unit.to_dict())
+        
+        # 如果没有未完成的网格单元，说明出错了，不需要保存
+        if len(active_to_save) == 0:
+            self.log(f"No active grid cycles to save for {self.strategy_id}.", level=0)
+            return
 
         self.profit_logs.append({
             "start_time": self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -859,8 +867,7 @@ class GridStrategy(Strategy):
                 cancel_tasks.append(self.api.cancel_order(unit.open_order))
             if unit.close_order:
                 cancel_tasks.append(self.api.cancel_order(unit.close_order))
-        # await asyncio.gather(*cancel_tasks)
-        time.sleep(1)  # 等待订单取消完成
+        time.sleep(2)  # 等待订单取消完成
 
         if self.completed_count > 0:
             # self.log(f"Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Avg: {round(self.net_profit/self.completed_count, 2)} AvgTimeCost: open({round(self.total_open_cost_time/self.completed_count, 2)}) close({round(self.total_close_cost_time/self.completed_count, 2)})")
