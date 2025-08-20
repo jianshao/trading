@@ -150,7 +150,7 @@ def get_data(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     data_list = []
     
     all_data = pd.DataFrame(data_list)
-    api = IBapi(port=7496, client_id=3)
+    api = IBapi(port=7497, client_id=3)
     api.connect()
     mockApi = MockApi(ib_api=api)
     end_dates = utils.get_us_trading_days(start_date, end_date)
@@ -175,37 +175,37 @@ if __name__ == '__main__':
     cerebro = bt.Cerebro()
 
     params = [
-        {"symbol":"WU", "cash": 20000, "position_sizing_mode": "fixed", "position_sizing_ratio": 0.05, "base_cost": 500, "spacing_mode": "fixed", "spacing_ratio": 0.05, "lower_bound": 0, "upper_bound": 10, "start_buy": 100}, # classic base
-        {"symbol":"WU", "cash": 20000, "position_sizing_mode": "fixed", "position_sizing_ratio": 0.05, "base_cost": 500, "spacing_mode": "fixed", "spacing_ratio": 0.05, "lower_bound": 0, "upper_bound": 10, "start_buy": 100}, # classic base
+        {"symbol":"NLY", "cash": 30000, "position_sizing_ratio": 0.00, "base_price": 19, "base_cost": 1000, "spacing_ratio": 0, "lower_bound": 18, "upper_bound": 23, "start_buy": 600, "space_diff": 0.007}, # classic base
+        {"symbol":"TQQQ", "cash": 60000, "position_sizing_ratio": 0.00, "base_price": 60, "base_cost": 1000, "spacing_ratio": 0, "lower_bound": 50, "upper_bound": 100, "start_buy": 400, "space_diff": 0.01}, # classic base
     ]
     
     # for param in params:
         # 2. Add the strategy
-    symbol = "NLY"
+    param = params[1]
     cerebro.addstrategy(GridStrategyBT, 
-                        symbol=symbol,
-                        base_price=19,
-                        base_cost=1000,
-                        position_sizing_ratio=0.00, # Increase shares by 5% each grid down
-                        spacing_ratio=0.00, # Increase spacing by 5% each grid
-                        lower_bound=17,
-                        upper_bound=21.5,
-                        start_buy=1000,
+                        symbol=param["symbol"],
+                        base_price=param["base_price"],
+                        base_cost=param["base_cost"],
+                        position_sizing_ratio=param["position_sizing_ratio"], # Increase shares by 5% each grid down
+                        spacing_ratio=param["spacing_ratio"], # Increase spacing by 5% each grid
+                        lower_bound=param["lower_bound"],
+                        upper_bound= param["upper_bound"],
+                        start_buy= param["start_buy"],
                         do_optimize=True,
-                        num_when_optimize=3,
-                        space_diff=0.005)
+                        num_when_optimize=1,
+                        space_diff= param["space_diff"])
 
     # 3. Create a Data Feed (using your provided test data)
-    df = get_data(symbol, "2024-01-01", "2025-01-01")
+    df = get_data(param["symbol"], "2025-05-01", "2025-07-28")
     # print(f"{df}")
     print(f"Total len: {len(df)}")
     
     # Convert to backtrader data feed
-    data_feed = bt.feeds.PandasData(dataname=df, name=symbol)
+    data_feed = bt.feeds.PandasData(dataname=df, name=param["symbol"])
     cerebro.adddata(data_feed)
 
     # 4. Set our desired cash and commission
-    cerebro.broker.setcash(94000.0)
+    cerebro.broker.setcash(param["cash"])
     # Example: 0.005 per share, with a minimum of $1.00 per trade
     cerebro.broker.setcommission(commission=0.005)
     cerebro.broker.setcommission(interest=0.0)

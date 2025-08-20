@@ -827,6 +827,34 @@ class GridStrategy(Strategy):
             self.log(f"Error decoding JSON for {self.strategy_id} from '{file_path}'. Starting fresh.")
 
 
+    def reorganize_profits(self):
+        """ Reorganizes the profit logs to ensure they are sorted by start time. and one log per day.
+        """
+        if not self.profit_logs:
+            return []
+        
+        # 将同一天的利润日志合并
+        merged_logs = {}
+        for log in self.profit_logs:
+            date_str = log['start_time'][:10]  # 只取日期部分
+            if date_str not in merged_logs:
+                merged_logs[date_str] = log
+            else:
+                # 合并利润和计数
+                merged_logs[date_str]['profit'] += log['profit']
+                merged_logs[date_str]['completed_count'] += log['completed_count']
+                
+                if log['start_time'] < merged_logs[date_str]['start_time']:
+                    merged_logs[date_str]['start_time'] = log['start_time']
+                if log['end_time'] > merged_logs[date_str]['end_time']:
+                    merged_logs[date_str]['end_time'] = log['end_time']
+                    
+        # 将dict转换成list
+        merged_logs = list(merged_logs.values())
+        # 按照开始时间排序
+        merged_logs.sort(key=lambda x: datetime.datetime.strptime(x['start_time'], "%Y-%m-%d %H:%M:%S"))
+        return merged_logs
+
     def _save_active_grid_cycles(self):
         file_path = self.data_file
         # 把pending orders中未完成的部分也写入到文件
@@ -849,7 +877,7 @@ class GridStrategy(Strategy):
             "profit": round(self.net_profit, 2),
         })
         data = {
-            "profits": self.profit_logs,
+            "profits": self.reorganize_profits(),
             "units": active_to_save
         }
         try:

@@ -44,6 +44,7 @@ class GridStrategyEngine:
             upper = param.get("upper") 
             proportion = param.get("proportion", 0.015)
             cost_per_grid = param.get("cost_per_grid", 500)
+            spacing_ratio = param.get("spacing_ratio", 0.00)  # Default spacing ratio if not provided
             data_file = param.get('data_file')
             do_optimize = param.get("do_optimize", False)
             num_when_optimize = param.get('num_when_optimize', 1)
@@ -53,6 +54,7 @@ class GridStrategyEngine:
             grid = GridStrategy(self.api, strategy_id, symbol, 
                                     base_price, lower, upper, 
                                     cost_per_grid, proportion, 
+                                    spacing_ratio=spacing_ratio,
                                     get_order_id=self.get_register_order_id_strategy_id,
                                     do_optimize=do_optimize, num_when_optimize=num_when_optimize,
                                     data_file=self.data_dir + "grid/" + data_file)
