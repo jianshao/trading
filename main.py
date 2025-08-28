@@ -29,7 +29,8 @@ def GetApi(real: bool) -> IBapi:
     if not real:
         api = IBapi(port=7497)
     else:
-        api = IBapi(port=4001)
+        # api = IBapi(port=4001)
+        api = IBapi(port=7496)
     if api.connect():
         return api
     return None

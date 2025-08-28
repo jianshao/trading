@@ -176,7 +176,7 @@ if __name__ == '__main__':
 
     params = [
         {"symbol":"NLY", "cash": 30000, "position_sizing_ratio": 0.00, "base_price": 19, "base_cost": 1000, "spacing_ratio": 0, "lower_bound": 18, "upper_bound": 23, "start_buy": 600, "space_diff": 0.007}, # classic base
-        {"symbol":"TQQQ", "cash": 60000, "position_sizing_ratio": 0.00, "base_price": 60, "base_cost": 1000, "spacing_ratio": 0, "lower_bound": 50, "upper_bound": 100, "start_buy": 400, "space_diff": 0.01}, # classic base
+        {"symbol":"TQQQ", "cash": 60000, "position_sizing_ratio": 0.00, "base_price": 60, "base_cost": 500, "spacing_ratio": 0.01, "lower_bound": 50, "upper_bound": 100, "start_buy": 600, "space_diff": 0.005}, # classic base
     ]
     
     # for param in params:
@@ -196,7 +196,7 @@ if __name__ == '__main__':
                         space_diff= param["space_diff"])
 
     # 3. Create a Data Feed (using your provided test data)
-    df = get_data(param["symbol"], "2025-05-01", "2025-07-28")
+    df = get_data(param["symbol"], "2025-05-01", "2025-05-21")
     # print(f"{df}")
     print(f"Total len: {len(df)}")
     

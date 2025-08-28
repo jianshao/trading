@@ -24,7 +24,6 @@ from apis.api import BaseAPI
 DEFAULT_IB_HOST = "127.0.0.1"
 DEFAULT_IB_PORT = 7497  # 7497是模拟账户
 # DEFAULT_IB_PORT = 7496  # 7496 for TWS, 4001/4002 for IB Gateway (paper/live)
-# DEFAULT_IB_PORT = 4002  # 4001是模拟账户
 
 # DEFAULT_IB_PORT = 4001  # 4001是ib gateway的真实账户
 # DEFAULT_IB_PORT = 4002  # 4002是ib gateway的模拟账户
@@ -137,7 +136,7 @@ class IBapi(BaseAPI):
             # print(f"IBapi Info (ReqId: {reqId}, Code: {errorCode}): {errorString}")
             return
         
-        print(f"IBapi Error (ReqId: {reqId}, Code: {errorCode}): {errorString}" + (f" for Contract: {contract.localSymbol if contract else 'N/A'}" ))
+        print(f"IBapi Error (ReqId: {reqId}, Code: {errorCode}): {errorString.encode().decode("unicode_escape")}" + (f" for Contract: {contract.localSymbol if contract else 'N/A'}" ))
         if self.error_handler:
             await self.error_handler(reqId, errorCode, errorString, contract)
 
