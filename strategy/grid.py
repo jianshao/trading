@@ -105,6 +105,7 @@ class GridStrategy(Strategy):
         # 上层传入的获取本地关联order_id，并且关联到对应策略的方法
         self.get_order_id: Callable[[str], int] = get_order_id
         
+        self.init_cash = 0
         self.cash = 0
         self.position = 0
         self.init_position = 0
@@ -590,7 +591,7 @@ class GridStrategy(Strategy):
         self.api = kwargs.get("api", None)
     
     # 策略初始化
-    def InitStrategy(self, current_market_price, potision, cash):
+    def InitStrategy(self, current_market_price, position, cash):
         self.log(f"Init Strategy {self} Starting...", level=1)
         # 根据标的历史数据计算当前策略参数
         # atr = await self.api.get_atr(self.contract)
@@ -608,21 +609,23 @@ class GridStrategy(Strategy):
         # 从文件中载入未完成的历史平仓单
         self._load_active_grid_cycles()
         
-        self.position = potision
-        self.init_position = potision
-        self.cash = cash
+        self.init_position = position if self.init_position == 0 else self.init_position
+        self.position = self.init_position
+        self.init_cash = cash if self.init_cash == 0 else self.init_cash
+        self.cash = self.init_cash
+        
         # 使用开盘价激活网格
         self.maintain_active_grid_orders(current_market_price)
         
         self.log(f" 基础价格：{self.base_price}, 价格上下限：{self.lower_bound} - {self.upper_bound}, 单网格成本：{self.cost_per_grid} 价差比例：{self.space_propor} 总网格数：{len(self.grid_definitions.keys())}", level=1)
-        self.log(f" 初始持仓：{potision:.0f} 初始资金：{cash} 是否开启优化：{self.do_optimize} 优化股数：{self.num_when_optimize}", level=1)
+        self.log(f" 当前持仓：{position:.0f} 可用资金：{cash} 是否开启优化：{self.do_optimize} 优化股数：{self.num_when_optimize}", level=1)
         self.log(f"Init Strategy {self} Completed.", level=1)
         return 
 
     def log(self, txt, level=0):
         """ Logging function for this strategy"""
         if level > 0:
-            print(f'{datetime.datetime.now()} {txt}')
+            print(f'{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} {txt}')
 
     def _find_the_unit(self, price: float, isbuy: bool):
         price = round(price, 2)
@@ -770,7 +773,16 @@ class GridStrategy(Strategy):
         # 不管是成交还是取消，都需要将该订单删除
         del self.order_id_2_unit[order.order_id]
             
-    
+    def recover_curr_position(self):
+        """从历史日志中恢复当前持仓"""
+        if not self.profit_logs or len(self.profit_logs) == 0:
+            return
+        
+        log = self.profit_logs[-1]
+        self.init_position = log.get('position', [0, 0])[1]
+        self.init_cash = log.get('cash', [0, 0])[1]
+        self.log(f"Recovered position from logs. Position: {self.init_position}, Total Cost: {self.init_cash}", level=1)
+        return
 
     # 从文件中读取历史未完成的平仓单，直接挂单，不再参与网格策略
     def _load_active_grid_cycles(self):
@@ -779,6 +791,8 @@ class GridStrategy(Strategy):
             with open(file_path, 'r') as f:
                 data = json.load(f) # Should be a list of cycle dicts
                 self.profit_logs = data.get('profits', [])
+                self.recover_curr_position()
+                
                 units = data.get('units', [])
                 for unit in units:
                     # 将网格单元转换成结构体
@@ -871,8 +885,8 @@ class GridStrategy(Strategy):
         self.profit_logs.append({
             "start_time": self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
             "end_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "init_position": self.init_position,
-            "curr_position": self.position,
+            "position": [self.init_position, self.position],
+            "cash": [self.init_cash, self.cash],
             "completed_count": self.completed_count,
             "profit": round(self.net_profit, 2),
         })
@@ -887,7 +901,7 @@ class GridStrategy(Strategy):
             print(f"Error saving active grid cycles for {self.strategy_id} to {file_path}: {e}")
 
     def DoStop(self):
-        self.log(f"\nStop Strategy: {self} ------", level=1)
+        self.log(f"Stop Strategy: {self}", level=1)
         self._save_active_grid_cycles()
         cancel_tasks = []
         for unit in self.grid_definitions.values():

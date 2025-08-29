@@ -136,7 +136,7 @@ class IBapi(BaseAPI):
             # print(f"IBapi Info (ReqId: {reqId}, Code: {errorCode}): {errorString}")
             return
         
-        print(f"IBapi Error (ReqId: {reqId}, Code: {errorCode}): {errorString.encode().decode("unicode_escape")}" + (f" for Contract: {contract.localSymbol if contract else 'N/A'}" ))
+        print(f"IBapi Error (ReqId: {reqId}, Code: {errorCode}): {errorString.encode('utf-8').decode('unicode_escape')}" + (f" for Contract: {contract.localSymbol if contract else 'N/A'}" ))
         if self.error_handler:
             await self.error_handler(reqId, errorCode, errorString, contract)
 

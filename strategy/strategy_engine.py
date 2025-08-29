@@ -49,8 +49,8 @@ class GridStrategyEngine:
             do_optimize = param.get("do_optimize", False)
             num_when_optimize = param.get('num_when_optimize', 1)
             cost = param.get("cost", 10000)  # Default cost if not provided
-            cash = param.get("cash", 10000)  # Default cash if not provided
-            position = param.get("position", 0)  # Default position if not provided
+            init_cash = param.get("init_cash", 10000)  # Default cash if not provided
+            init_position = param.get("init_position", 0)  # Default position if not provided
             
             strategy_id = f"GRID_{unique_tag}_{symbol}"
             grid = GridStrategy(self.api, strategy_id, symbol, 
@@ -71,7 +71,7 @@ class GridStrategyEngine:
                     break
 
             start_price = param.get("start_price")
-            grid.InitStrategy(start_price, pos, round(cost, 2))
+            grid.InitStrategy(start_price, init_position, round(init_cash, 2))
         
         return True
     
