@@ -48,7 +48,6 @@ class GridStrategyEngine:
             data_file = param.get('data_file')
             do_optimize = param.get("do_optimize", False)
             num_when_optimize = param.get('num_when_optimize', 1)
-            cost = param.get("cost", 10000)  # Default cost if not provided
             init_cash = param.get("init_cash", 10000)  # Default cash if not provided
             init_position = param.get("init_position", 0)  # Default position if not provided
             
@@ -61,14 +60,6 @@ class GridStrategyEngine:
                                     do_optimize=do_optimize, num_when_optimize=num_when_optimize,
                                     data_file=self.data_dir + "grid/" + data_file)
             self.strategy_params[strategy_id] = grid
-            
-            pos = 0   # 假设初始现金为10000
-            for position in self.positions:
-                # 只处理股票
-                if position.contract.secType == "STK" and position.contract.symbol == grid.symbol:
-                    pos = position.position
-                    cost -= position.avgCost * pos
-                    break
 
             start_price = param.get("start_price")
             grid.InitStrategy(start_price, init_position, round(init_cash, 2))
@@ -191,25 +182,6 @@ class GridStrategyEngine:
         self._log(f"Strategy Engine Stop Running...", level=1)
         self.is_running = False
         
-        # --- 统计今日所有订单情况 ---
-        # This requires the trade_log to be comprehensive or to query IB for today's trades.
-        # The self.trade_log currently only has completed grid sell PNL.
-        # if self.trade_log:
-        #     log_df = pd.DataFrame(self.trade_log)
-        #     total_net_profit = log_df['net_profit'].sum()
-        #     total_gross_profit = log_df['gross_profit'].sum()
-        #     total_fees_paid = log_df['fees'].sum()
-        #     num_closed_grids = len(log_df)
-
-        #     print("\n--- Strategy Run Summary ---")
-        #     print(f"Total Closed Grid Trades: {num_closed_grids}")
-        #     print(f"Total Gross Profit (from closed grids): ${total_gross_profit:.2f}")
-        #     print(f"Total Fees Paid (from closed grids): ${total_fees_paid:.2f}")
-        #     print(f"Total Net Profit (from closed grids): ${total_net_profit:.2f}")
-        #     if num_closed_grids > 0:
-        #         print(f"Average Net Profit per Closed Grid: ${total_net_profit/num_closed_grids:.2f}")
-        # else:
-        #     print("No grid trades were fully closed and logged during this session.")
         for strategy_id, params in self.strategy_params.items() or {}:
             self.strategy_result[strategy_id] = params.DoStop()
                 
@@ -220,7 +192,6 @@ class GridStrategyEngine:
                            "strategy_id": sid.split("_")[2], 
                            "proportion": item.get("proportion", 0),
                            "net_profit": item.get("net_profit", 0)})
-        # utils.show_figure(result)
         
         self._log(f"Strategy Engine Stop Running Done.", level=1)
         return self.strategy_result

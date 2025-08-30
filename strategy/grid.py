@@ -8,7 +8,6 @@ import random
 import sys
 import time
 from typing import Dict, List, Any, Optional, Tuple, Callable
-# import numpy as np
 import pandas as pd
 
 from strategy.common import OrderStatus, GridOrder, LiveGridCycle
@@ -31,8 +30,6 @@ DO_OPTIMIZE = True
 @dataclass
 class GridUnit:
     price: float
-    # buy_price: float
-    # sell_price: float
     quantity: float
     open_order: Optional['GridOrder'] = None
     close_order: Optional['GridOrder'] = None
@@ -41,8 +38,6 @@ class GridUnit:
     def to_dict(self) -> Dict[str, Any]:
         """将 GridUnit 对象转换为字典"""
         return {
-            # 'buy_price': self.buy_price,
-            # 'sell_price': self.sell_price,
             'price': self.price,
             'quantity': self.quantity,
             'open_order': self.open_order.to_dict() if self.open_order else None,
@@ -65,8 +60,6 @@ class GridUnit:
         
         return cls(
             price=data['price'],
-            # buy_price=data['buy_price'],
-            # sell_price=data['sell_price'],
             quantity=data['quantity'],
             open_order=open_order,
             close_order=close_order,
@@ -74,7 +67,6 @@ class GridUnit:
         )
         
     def __str__(self):
-        # return "{" + f" @{self.buy_price} - @{self.sell_price}, quantity: {self.quantity}" + "}"
         return "{" + f" @{self.price}, quantity: {self.quantity}" + "}"
         
 class GridStrategy(Strategy):
@@ -200,27 +192,6 @@ class GridStrategy(Strategy):
         """
         
         grids = []
-        
-        # # 从最高价格开始向下生成，需要先计算各网格的参数
-        # # 计算每个网格的价差比例和成本（从下往上）
-        # price_ratios = []
-        # costs = []
-        
-        # current_price_ratio = grid_price_ratio
-        # current_cost = base_cost
-        
-        # for i in range(num_grids):
-        #     price_ratios.append(current_price_ratio)
-        #     costs.append(current_cost)
-            
-        #     if i < num_grids - 1:
-        #         current_price_ratio = current_price_ratio * (1 + price_growth_ratio)
-        #         current_cost = current_cost * (1 + cost_growth_ratio)
-        
-        # # 反转列表，从最高价格开始
-        # price_ratios.reverse()
-        # costs.reverse()
-        
         # 从基础价格开始向下计算
         current_sell_price = base_price
         current_cost = base_cost
@@ -319,29 +290,16 @@ class GridStrategy(Strategy):
         for price in target_buy_levels:
             unit = self.grid_definitions[price]
             # 当前网格不是空闲的
-            # if unit.open_order_ids or unit.close_order_ids:
-            #     continue
-            # self.log(f"Checking unit {unit} for buy order: {unit.open_order} 000", level=1)
             if unit.open_order:
                 continue
-            # self.log(f"Checking unit {unit} for buy order at price {unit.price} 111", level=1)
             # 现有资金仍然可以挂买单
             if round(self.pending_buy_cost + unit.quantity * unit.price, 2) > round(self.cash):
                 continue
-            # self.log(f"Checking unit {unit} for buy order at price {unit.price} 222", level=1)
             order = asyncio.get_event_loop().run_until_complete(self.grid_buy(purpose="OPEN", price=unit.price, size=unit.quantity))
             if order:
-                # self.log(f"Price {unit.buy_price:.2f} is in core buy zone and free. Placing BUY order for {unit} {order.order_id} shares.", level=1)
                 self.order_id_2_unit[order.order_id] = unit
                 unit.open_order = order
-                # self.grid_definitions[unit.buy_price].open_order_ids.append(order.order_id)
-            # self.log(f"Checking unit {unit} for buy order at price {unit.price} 333", level=1)
             
-        
-        # 取当前价格的高一网格
-        # target_sell_levels = sorted(
-        #         [unit.buy_price for unit in self.grid_definitions.values() if unit.sell_price > current_price]
-        #     )
         
         target_sell_levels = sorted(
                 [price for price in self.grid_definitions.keys() if price > current_price]
@@ -358,7 +316,6 @@ class GridStrategy(Strategy):
             order = asyncio.get_event_loop().run_until_complete(self.grid_sell(purpose="OPEN", price=unit.price, size=unit.quantity))
             if order:
                 # self.log(f"Price {unit.sell_price:.2f} is in core sell zone and free. Placing SELL order for {unit} {order.order_id} shares.", level=1)
-                # self.pending_orders[order.order_id] = order
                 self.order_id_2_unit[order.order_id] = unit
                 unit.open_order = order
             
@@ -912,7 +869,6 @@ class GridStrategy(Strategy):
         time.sleep(2)  # 等待订单取消完成
 
         if self.completed_count > 0:
-            # self.log(f"Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Avg: {round(self.net_profit/self.completed_count, 2)} AvgTimeCost: open({round(self.total_open_cost_time/self.completed_count, 2)}) close({round(self.total_close_cost_time/self.completed_count, 2)})")
             self.log(f"Pos: {self.position} Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Avg: {round(self.net_profit/self.completed_count, 2)} Pending: Buy({self.pending_buy_count}, {self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})", level=1)
 
         # 检查当前持仓和资金，并与策略执行前的对比
@@ -923,7 +879,6 @@ class GridStrategy(Strategy):
             "net_profit": self.net_profit
         }
         
-        # self.log(f"Unit Count: {[{unit.buy_price: unit.completed_count} for unit in self.grid_definitions.values() if unit.completed_count != 0]}", level=0)
         return {"spacing_ratio": self.price_growth_ratio, "position_sizing_ratio": self.cost_growth_ratio, "net_profit": round(self.net_profit, 2)}
 
     def daily_summy(self, date_str: str) -> str:
@@ -945,4 +900,3 @@ class GridStrategy(Strategy):
         if self.completed_count:
             avg = round(self.net_profit/self.completed_count, 2)
         return f"Completed: {self.completed_count:>3}, Profit: {round(self.net_profit, 2):>7.2f}, Pending: Buy({self.pending_buy_count:>3}, {self.pending_buy_cost:>8.2f}) Sell({self.pending_sell_count:>3}, {self.pending_sell_cost:>8.2f})"
-        # return f"Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Avg: {avg} Pending: Buy({self.pending_buy_count, self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})"
