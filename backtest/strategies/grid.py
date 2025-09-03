@@ -196,7 +196,7 @@ if __name__ == '__main__':
                         space_diff= param["space_diff"])
 
     # 3. Create a Data Feed (using your provided test data)
-    df = get_data(param["symbol"], "2025-05-01", "2025-05-21")
+    df = get_data(param["symbol"], "2025-09-01", "2025-09-03")
     # print(f"{df}")
     print(f"Total len: {len(df)}")
     
