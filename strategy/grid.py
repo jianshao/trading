@@ -659,6 +659,7 @@ class GridStrategy(Strategy):
                 # 找到对应网格，提交使用的限价一定是网格的买入价格
                 if unit.open_order and order.order_id == unit.open_order.order_id:
                     # 一定要记得刷新建仓单，否则统计时拿不到建仓单的成交价
+                    order.apply_time = unit.open_order.apply_time
                     unit.open_order = order
                     # 使用对应的网格提交卖单
                     sell_order = await self.grid_sell(purpose="CLOSE", price=next_unit.price, size=next_unit.quantity)
@@ -686,6 +687,7 @@ class GridStrategy(Strategy):
                 
                 self.log(f'SELL EXECUTED, LmtPrice: {order.lmt_price} DonePrice: {order.done_price:.2f}, Qty: {order.done_shares:.0f} Id: {order.order_id}', level=0)
                 if unit.open_order and  order.order_id == unit.open_order.order_id:
+                    order.apply_time = unit.open_order.apply_time
                     unit.open_order = order
                     # 建仓单成交，提交平仓单
                     buy_order = await self.grid_buy(purpose="CLOSE", price=next_unit.price, size=next_unit.quantity)
@@ -826,7 +828,7 @@ class GridStrategy(Strategy):
     def _save_active_grid_cycles(self):
         file_path = self.data_file
         # 把pending orders中未完成的部分也写入到文件
-        active_to_save = []        
+        active_to_save = []
         for unit in self.grid_definitions.values():
             if unit.open_order or unit.close_order:
                 active_to_save.append(unit.to_dict())
@@ -839,8 +841,8 @@ class GridStrategy(Strategy):
         self.profit_logs.append({
             "start_time": self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
             "end_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "position": [self.init_position, self.position],
-            "cash": [self.init_cash, self.cash],
+            "position": [round(self.init_position, 2), round(self.position, 2)],
+            "cash": [round(self.init_cash, 2), round(self.cash, 2)],
             "completed_count": self.completed_count,
             "profit": round(self.net_profit, 2),
         })
@@ -867,14 +869,6 @@ class GridStrategy(Strategy):
 
         if self.completed_count > 0:
             self.log(f"Pos: {self.position} Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Avg: {round(self.net_profit/self.completed_count, 2)} Pending: Buy({self.pending_buy_count}, {self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})", level=1)
-
-        # 检查当前持仓和资金，并与策略执行前的对比
-        result = {
-            "init_position": self.init_position,
-            "curr_position": self.position,
-            "completed_count": self.completed_count,
-            "net_profit": self.net_profit
-        }
         
         return {"spacing_ratio": self.price_growth_ratio, "position_sizing_ratio": self.cost_growth_ratio, "net_profit": round(self.net_profit, 2)}
 
