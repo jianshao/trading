@@ -43,7 +43,7 @@ class GridOrder:
             "order_id": self.order_id,
             "lmt_price": self.lmt_price,
             "shares": self.shares,
-            "done_price": round(self.done_price),
+            "done_price": round(self.done_price, 2),
             "done_shares": self.done_shares,
             "fee": self.fee,
             "status": self.status.name,  # Store as string for readability

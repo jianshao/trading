@@ -638,14 +638,17 @@ class GridStrategy(Strategy):
         if order.status in [OrderStatus.Completed]:
             # 订单成交更新持仓和成本
             # 统计数据要使用成交价和成交数量
-            # done_shares是成交数量，有正负值，done_price是成交价
-            self.position += order.done_shares
-            self.cash -= order.done_price*order.done_shares
             if order.isbuy():
+                self.position += abs(order.done_shares)
+                self.cash -= abs(order.done_price*order.done_shares)
+            
                 self.pending_buy_count -= abs(order.done_shares)
                 self.pending_buy_cost = round(self.pending_buy_cost - abs(order.done_shares * order.done_price), 2)
                 self.log(f"BUY: Updated Position: {self.position}, Cash: {round(self.cash)}", level=1)
             else:
+                self.position -= abs(order.done_shares)
+                self.cash += abs(order.done_price*order.done_shares)
+                
                 self.pending_sell_count -= abs(order.done_shares)
                 self.pending_sell_cost = round(self.pending_sell_cost - abs(order.done_shares * order.done_price), 2)
                 self.log(f"SELD: Updated Position: {self.position}, Cash: {round(self.cash)}", level=1)
@@ -813,6 +816,8 @@ class GridStrategy(Strategy):
                 # 合并利润和计数
                 merged_logs[date_str]['profit'] += log['profit']
                 merged_logs[date_str]['completed_count'] += log['completed_count']
+                merged_logs[date_str]['position'][1] = log['position'][1]
+                merged_logs[date_str]['cash'][1] = log['cash'][1]
                 
                 if log['start_time'] < merged_logs[date_str]['start_time']:
                     merged_logs[date_str]['start_time'] = log['start_time']
