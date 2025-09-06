@@ -73,6 +73,7 @@ class GridStrategy(Strategy):
     def __init__(self, api: BaseAPI, strategy_id, symbol: str,
                  base_price: float, lowwer: float, upper: float, # 网格上下限
                  cost_per_grid: float, space_propor: float = 0.01,
+                 max_orders: int = 0, # 最大单方向同时挂单数
                  spacing_ratio: float = 0, # 按比例增大网格价差，1.0为价差不变
                  position_sizing_ratio: float = 0, # 按比例增加每网格成本，1.0为成本不变
                  do_optimize: bool = False, num_when_optimize: int = 1,
@@ -89,6 +90,7 @@ class GridStrategy(Strategy):
         self.upper_bound = upper
         self.space_propor = space_propor
         self.cost_per_grid = cost_per_grid  # 单网格成本
+        self.max_orders = max_orders  # 最大单方向同时挂单数，0为不限制
         self.num_when_optimize = num_when_optimize  # 当开启优化选项时单次多买入或少卖出多少股
         self.do_optimize = do_optimize  # 是否开启优化，开启优化后可以逐步建仓。
         self.price_growth_ratio = spacing_ratio # 网格价差增长的比例，1.0为不增长
@@ -344,14 +346,16 @@ class GridStrategy(Strategy):
     async def grid_buy(self, purpose: str, price: float, size: float) -> Optional[GridOrder]:
         size += self.optimize(price, "BUY")
         # 对应网格未激活时不能提交订单，只针对建仓订单
-        cost = round(price * size, 2)
+        
         order_id = None
         if self.get_order_id:
             order_id = self.get_order_id(self.strategy_id)
-        self.pending_buy_count += abs(size)
-        self.pending_buy_cost = round(self.pending_buy_cost + abs(cost), 2)
+            
         order = await self.api.place_limit_order(self.symbol, "BUY", quantity=size, limit_price=price, order_id_to_use=order_id)
         if order:
+            cost = round(price * size, 2)
+            self.pending_buy_count += abs(size)
+            self.pending_buy_cost = round(self.pending_buy_cost + abs(cost), 2)
             self.log(f"Place BUY order, Price: {price:.2f}, Qty: {size} Id: {order.order_id}", level=0)
         return order
       
@@ -575,7 +579,7 @@ class GridStrategy(Strategy):
         self.maintain_active_grid_orders(current_market_price)
         
         self.log(f" 基础价格：{self.base_price}, 价格上下限：{self.lower_bound} - {self.upper_bound}, 单网格成本：{self.cost_per_grid} 价差比例：{self.space_propor} 总网格数：{len(self.grid_definitions.keys())}", level=1)
-        self.log(f" 当前持仓：{position:.0f} 可用资金：{cash} 是否开启优化：{self.do_optimize} 优化股数：{self.num_when_optimize}", level=1)
+        self.log(f" 当前持仓：{self.position:.0f} 可用资金：{self.cash} 是否开启优化：{self.do_optimize} 优化股数：{self.num_when_optimize}", level=1)
         self.log(f"Init Strategy {self} Completed.", level=1)
         return 
 
@@ -740,7 +744,7 @@ class GridStrategy(Strategy):
         log = self.profit_logs[-1]
         self.init_position = log.get('position', [0, 0])[1]
         self.init_cash = log.get('cash', [0, 0])[1]
-        self.log(f"Recovered position from logs. Position: {self.init_position}, Total Cost: {self.init_cash}", level=1)
+        self.log(f"Recovered position from logs. Position: {self.init_position}, Total Cost: {self.init_cash}", level=0)
         return
 
     # 从文件中读取历史未完成的平仓单，直接挂单，不再参与网格策略
