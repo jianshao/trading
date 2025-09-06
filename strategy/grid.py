@@ -131,7 +131,7 @@ class GridStrategy(Strategy):
         
 
     def __str__(self):
-        return (f"GridParams(ID={self.strategy_id}, Sym={self.symbol}, Space={self.space_propor:.3f} Cost={self.cost_per_grid:.2f})")
+        return (f"(ID={self.strategy_id}, Sym={self.symbol}, Space={self.space_propor*100:.1f}% Cost={self.cost_per_grid:.0f})")
     
     def generate_grid_upward(self, base_price, base_cost, grid_price_ratio, price_growth_ratio, cost_growth_ratio):
         """
@@ -553,7 +553,7 @@ class GridStrategy(Strategy):
     
     # 策略初始化
     def InitStrategy(self, current_market_price, position, cash):
-        self.log(f"Init Strategy {self} Starting...", level=1)
+        self.log(f"Strategy {self} Initialling...", level=1)
         # 根据标的历史数据计算当前策略参数
         # atr = await self.api.get_atr(self.contract)
         
@@ -578,9 +578,9 @@ class GridStrategy(Strategy):
         # 使用开盘价激活网格
         self.maintain_active_grid_orders(current_market_price)
         
-        self.log(f" 基础价格：{self.base_price}, 价格上下限：{self.lower_bound} - {self.upper_bound}, 单网格成本：{self.cost_per_grid} 价差比例：{self.space_propor} 总网格数：{len(self.grid_definitions.keys())}", level=1)
+        self.log(f" 价格基线：{self.base_price}, 价格范围：[{self.lower_bound}, {self.upper_bound}], 单格投入：{self.cost_per_grid} 单格价差：{self.space_propor*100:.1f}%", level=1)
         self.log(f" 当前持仓：{self.position:.0f} 可用资金：{self.cash} 是否开启优化：{self.do_optimize} 优化股数：{self.num_when_optimize}", level=1)
-        self.log(f"Init Strategy {self} Completed.", level=1)
+        self.log(f"Strategy {self} Running.", level=1)
         return 
 
     def log(self, txt, level=0):
@@ -648,14 +648,14 @@ class GridStrategy(Strategy):
             
                 self.pending_buy_count -= abs(order.done_shares)
                 self.pending_buy_cost = round(self.pending_buy_cost - abs(order.done_shares * order.done_price), 2)
-                self.log(f"BUY: Updated Position: {self.position}, Cash: {round(self.cash)}", level=1)
+                self.log(f"BUY: Updated Position: {self.position}, Cash: {round(self.cash)}", level=0)
             else:
                 self.position -= abs(order.done_shares)
                 self.cash += abs(order.done_price*order.done_shares)
                 
                 self.pending_sell_count -= abs(order.done_shares)
                 self.pending_sell_cost = round(self.pending_sell_cost - abs(order.done_shares * order.done_price), 2)
-                self.log(f"SELD: Updated Position: {self.position}, Cash: {round(self.cash)}", level=1)
+                self.log(f"SOLD: Updated Position: {self.position}, Cash: {round(self.cash)}", level=0)
 
                 
             # 成交价可能与限价不一样，更新对应网格的状态要用限价

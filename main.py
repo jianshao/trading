@@ -74,7 +74,7 @@ if __name__ == "__main__":
         
     strategiesMap: Dict[str, any] = {}
 
-    print(f"******************************************** Auto Trading System Starting ********************************************")
+    print(f"************************** Auto Trading System Starting **************************")
     try:
         # 组装、连接api，使api与策略解耦
         api = GetApi(args.account == 'real')
@@ -109,7 +109,7 @@ if __name__ == "__main__":
         # 先执行清理动作，然后关闭连接
         StopStrategies(strategiesMap)
         api.disconnect()
-        print(f"******************************************** Auto Trading System Exited! ********************************************")
+        print(f"************************** Auto Trading System Exited! **************************")
 
     
 

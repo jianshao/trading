@@ -105,7 +105,7 @@ class IBapi(BaseAPI):
             self.ib.disconnect()
         self._is_connected = False
         # ib_insync handles its own loop cleanup mostly
-        print("IBapi: Disconnected.")
+        # print("IBapi: Disconnected.")
 
     def isConnected(self) -> bool:
         return self._is_connected and self.ib.isConnected()
@@ -165,7 +165,7 @@ class IBapi(BaseAPI):
         self,
         handler: Callable[[], Coroutine[Any, Any, None]] # No arguments
     ):
-        print("Registers a handler for when the API disconnects.")
+        # print("Registers a handler for when the API disconnects.")
         return 
 
     async def get_contract_details(self, symbol: str, exchange: str = "SMART", 

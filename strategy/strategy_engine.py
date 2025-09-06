@@ -105,8 +105,8 @@ class GridStrategyEngine:
         return current_id
 
     def _log(self, content, level: int = 0):
-        if level in [0, 1]:
-            print(f"{datetime.datetime.now()} {content}")
+        if level in [1]:
+            print(f'{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} {content}')
         
         
     def InitStrategy(self): # Renamed and made async
@@ -135,9 +135,9 @@ class GridStrategyEngine:
             self._log(f"Error: Could not get initial next valid order ID from IB API. Halting strategy init.", level=1)
             return False
         self.next_order_id_counter = initial_ib_order_id
-        self._log(f"Initialize Order Id Done: {self.next_order_id_counter}.", level=1)
+        self._log(f"Initialize Order Id Done: {self.next_order_id_counter}.", level=0)
 
-        self._log(f"Strategy Engine Initialize Done.", level=1)
+        self._log(f"Strategy Engine Initialize Completed.", level=1)
         return True
 
     async def handle_disconnect_event(self):
