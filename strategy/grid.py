@@ -12,6 +12,7 @@ import pandas as pd
 
 from strategy.common import OrderStatus, GridOrder, LiveGridCycle
 from strategy.strategy import Strategy
+from utils import utils
 
 if __name__ == '__main__': # Allow running/importing from different locations
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -351,7 +352,7 @@ class GridStrategy(Strategy):
         if self.get_order_id:
             order_id = self.get_order_id(self.strategy_id)
             
-        order = await self.api.place_limit_order(self.symbol, "BUY", quantity=size, limit_price=price, order_id_to_use=order_id)
+        order = await self.api.place_limit_order(self.symbol, "BUY", quantity=size, limit_price=price, tif="DAY", order_id_to_use=order_id)
         if order:
             cost = round(price * size, 2)
             self.pending_buy_count += abs(size)
@@ -366,7 +367,7 @@ class GridStrategy(Strategy):
             order_id = self.get_order_id(self.strategy_id)
         self.pending_sell_count += abs(size)
         self.pending_sell_cost = round(self.pending_sell_cost + abs(price * size), 2)
-        sell_order = await self.api.place_limit_order(self.symbol, "SELL", quantity=size, limit_price=price, order_id_to_use=order_id)
+        sell_order = await self.api.place_limit_order(self.symbol, "SELL", quantity=size, limit_price=price, tif="DAY", order_id_to_use=order_id)
         if sell_order:
             self.log(f"Place SELL order, Price: {price:.2f}, Qty: {size} Id: {sell_order.order_id}", level=0)
         return sell_order
@@ -855,8 +856,9 @@ class GridStrategy(Strategy):
             "completed_count": self.completed_count,
             "profit": round(self.net_profit, 2),
         })
+        self.profit_logs = self.reorganize_profits()
         data = {
-            "profits": self.reorganize_profits(),
+            "profits": self.profit_logs,
             "units": active_to_save
         }
         try:
@@ -876,6 +878,10 @@ class GridStrategy(Strategy):
                 cancel_tasks.append(self.api.cancel_order(unit.close_order))
         time.sleep(2)  # 等待订单取消完成
 
+        # 使用图表显示每日盈利
+        dates = [log['start_time'][5:10] for log in self.profit_logs]
+        profits = [log['profit'] for log in self.profit_logs]
+        utils.daily_profit(dates[-22:], profits[-22:], title=f"Strategy {self.strategy_id} Daily Profits")
         if self.completed_count > 0:
             self.log(f"Pos: {self.position} Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Avg: {round(self.net_profit/self.completed_count, 2)} Pending: Buy({self.pending_buy_count}, {self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})", level=1)
         
