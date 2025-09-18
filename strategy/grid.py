@@ -778,13 +778,15 @@ class GridStrategy(Strategy):
                 self.order_id_2_unit[order.order_id] = unit
         else:
             LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"grid_active", content=f"Recovering Activating Grid Unit: {unit.price} Qty: {unit.quantity}")
-            if unit.open_order and unit.open_order.status not in [OrderStatus.Completed]:
+            # 没有开仓单或者开仓单已完成或者开仓单已挂单的不需要挂新单
+            if unit.open_order and unit.open_order.status not in [OrderStatus.Completed, OrderStatus.Created, OrderStatus.Submitted]:
                 order = await self.grid_open(unit, unit.open_order.action)
                 if order:
                     unit.open_order = order
                     self.order_id_2_unit[order.order_id] = unit
-                
-            if unit.close_order and unit.close_order.status not in [OrderStatus.Completed]:
+            
+            # 平仓单同理
+            if unit.close_order and unit.close_order.status not in [OrderStatus.Completed, OrderStatus.Created, OrderStatus.Submitted]:
                 order = await self.grid_close(unit, unit.close_order.action)
                 if order:
                     unit.close_order = order
