@@ -11,6 +11,7 @@ from apis.api import BaseAPI
 from strategy import common
 from strategy.strategy import Strategy
 from strategy.grid import GridStrategy
+from utils.logger_manager import LoggerManager
 
 WATCHLIST_FILE = "watchlist_grid_config.json"  # For symbols and their daily params
 
@@ -23,7 +24,7 @@ class GridStrategyEngine:
 
         self.watchlist_file = os.path.join(self.data_dir, WATCHLIST_FILE) # Centralized path
 
-        self.strategy_params: Dict[str, GridStrategy] = {}
+        self.strategy_params: Dict[str, Strategy] = {}
         
         # order_id -> strategy_id
         self.order_id_strategy_id: Dict[int, str] = {}
@@ -33,6 +34,14 @@ class GridStrategyEngine:
         
         self.is_running = False
         self.next_order_id_counter: Optional[int] = None
+        
+        log_configs = {
+            "order": "logs/order.log",
+            "app": "logs/app.log"
+        }
+        clickhouse_config = {"host": "127.0.0.1", "database": "trading"}
+
+        LoggerManager.init(log_configs, clickhouse_config)
 
 
     def _load_grid_strategies(self, params: List[Dict[Any, Any]]) -> bool:
@@ -45,7 +54,7 @@ class GridStrategyEngine:
             proportion = param.get("proportion", 0.015)
             cost_per_grid = param.get("cost_per_grid", 500)
             spacing_ratio = param.get("spacing_ratio", 0.00)  # Default spacing ratio if not provided
-            data_file = param.get('data_file')
+            data_file = param.get('data_file', "")
             do_optimize = param.get("do_optimize", False)
             num_when_optimize = param.get('num_when_optimize', 1)
             init_cash = param.get("init_cash", 10000)  # Default cash if not provided
@@ -54,13 +63,13 @@ class GridStrategyEngine:
             
             strategy_id = f"GRID_{unique_tag}_{symbol}"
             grid = GridStrategy(self.api, strategy_id, symbol, 
-                                    base_price, lower, upper, 
-                                    cost_per_grid, proportion, 
-                                    max_orders=max_orders,
-                                    spacing_ratio=spacing_ratio,
-                                    get_order_id=self.get_register_order_id_strategy_id,
-                                    do_optimize=do_optimize, num_when_optimize=num_when_optimize,
-                                    data_file=self.data_dir + "grid/" + data_file)
+                                base_price, lower, upper, 
+                                cost_per_grid, proportion, 
+                                max_orders=max_orders,
+                                spacing_ratio=spacing_ratio,
+                                get_order_id=self.get_register_order_id_strategy_id,
+                                do_optimize=do_optimize, num_when_optimize=num_when_optimize,
+                                data_file=self.data_dir + "grid/" + data_file)
             self.strategy_params[strategy_id] = grid
 
             start_price = param.get("start_price")

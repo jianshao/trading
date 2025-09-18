@@ -150,7 +150,7 @@ def get_data(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     data_list = []
     
     all_data = pd.DataFrame(data_list)
-    api = IBapi(port=7497, client_id=3)
+    api = IBapi(port=7497, client_id=4)
     api.connect()
     mockApi = MockApi(ib_api=api)
     end_dates = utils.get_us_trading_days(start_date, end_date)
@@ -176,12 +176,13 @@ if __name__ == '__main__':
 
     params = [
         {"symbol":"NLY", "cash": 30000, "position_sizing_ratio": 0.00, "base_price": 19, "base_cost": 1000, "spacing_ratio": 0, "lower_bound": 18, "upper_bound": 23, "start_buy": 600, "space_diff": 0.007}, # classic base
-        {"symbol":"TQQQ", "cash": 60000, "position_sizing_ratio": 0.00, "base_price": 60, "base_cost": 500, "spacing_ratio": 0.01, "lower_bound": 50, "upper_bound": 100, "start_buy": 600, "space_diff": 0.005}, # classic base
+        {"symbol":"TQQQ", "cash": 260000, "position_sizing_ratio": 0.00, "base_price": 60, "base_cost": 500, "spacing_ratio": 0, "lower_bound": 30, "upper_bound": 100, "start_buy": 1500, "space_diff": 0.006}, # classic base
+        {"symbol":"QQQ", "cash": 260000, "position_sizing_ratio": 0.00, "base_price": 500, "base_cost": 1200, "spacing_ratio": 0, "lower_bound": 450, "upper_bound": 700, "start_buy": 200, "space_diff": 0.003}, # classic base
     ]
     
     # for param in params:
         # 2. Add the strategy
-    param = params[1]
+    param = params[2]
     cerebro.addstrategy(GridStrategyBT, 
                         symbol=param["symbol"],
                         base_price=param["base_price"],
@@ -191,12 +192,12 @@ if __name__ == '__main__':
                         lower_bound=param["lower_bound"],
                         upper_bound= param["upper_bound"],
                         start_buy= param["start_buy"],
-                        do_optimize=True,
+                        do_optimize=False,
                         num_when_optimize=1,
                         space_diff= param["space_diff"])
 
     # 3. Create a Data Feed (using your provided test data)
-    df = get_data(param["symbol"], "2025-09-01", "2025-09-03")
+    df = get_data(param["symbol"], "2025-05-01", "2025-09-05")
     # print(f"{df}")
     print(f"Total len: {len(df)}")
     

@@ -1,3 +1,6 @@
+from strategy.common import GridOrder
+
+
 class Strategy:
     def InitStrategy(self, **kwargs):
         pass
@@ -6,4 +9,7 @@ class Strategy:
         pass
       
     def Reconnect(self, **kwargs):
+        pass
+    
+    async def update_order_status(self, order: GridOrder):
         pass
