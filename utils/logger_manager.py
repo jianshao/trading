@@ -78,7 +78,7 @@ class LoggerManager:
         # structlog 基本配置：TimeStamper + JSONRenderer（文件端）
         structlog.configure(
             processors=[
-                structlog.processors.TimeStamper(fmt="iso", tz=ZoneInfo("Asia/Shanghai")),
+                structlog.processors.TimeStamper(fmt="iso", utc=True),
                 structlog.processors.JSONRenderer(sort_keys=False, ensure_ascii=False),
             ],
             context_class=dict,
@@ -95,7 +95,7 @@ class LoggerManager:
             )
             handler.setFormatter(logging.Formatter('%(message)s'))
             std_logger = logging.getLogger(name)
-            std_logger.setLevel(logging.DEBUG)
+            std_logger.setLevel(logging.INFO)
             # 避免重复添加 handler（多次 init 的情况）
             if not any(getattr(h, "baseFilename", None) == getattr(handler, "baseFilename", None)
                        for h in std_logger.handlers):

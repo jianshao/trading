@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import datetime
+import holidays
 import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -62,3 +63,22 @@ def get_us_trading_days(start_date: str, end_date: str) -> list:
     schedule = nyse.schedule(start_date=start_date, end_date=end_date)
     trading_days = schedule.index.strftime('%Y%m%d').tolist()
     return trading_days
+
+
+def is_us_stock_open() -> bool:
+    """
+    判断给定日期是否是美股开盘日 (NYSE/NASDAQ)
+    :param date: datetime.date, 默认为今天
+    :return: bool
+    """
+    date = datetime.date.today()
+    # 周六周日不开盘
+    if date.weekday() >= 5:  # 5=周六, 6=周日
+        return False
+
+    # 美国节假日
+    us_holidays = holidays.US(years=date.year)
+    if date in us_holidays:
+        return False
+
+    return True

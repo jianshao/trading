@@ -1,11 +1,18 @@
 #!/usr/bin/python3#!/usr/bin/python3
+import socket
+import subprocess
 import datetime
 import sys
 import os
 import signal
+import time
 from typing import Dict
 from datetime import timedelta
 import argparse
+import holidays
+
+from ib_client_manager import IBClientManager
+from utils import utils
 
 if __name__ == '__main__': # Only adjust path if running as script directly
     # This assumes backtester_main.py is in a subdirectory (e.g., 'scripts')
@@ -23,17 +30,6 @@ from strategy.strategy_engine import GridStrategyEngine
 STRATEGY_GRID = "grid"
 
 is_running: bool = False
-
-# connect只能用同步的，使用异步的会出问题
-def GetApi(real: bool) -> IBapi:
-    if not real:
-        api = IBapi(port=7497)
-    else:
-        # api = IBapi(port=4001)
-        api = IBapi(port=7496)
-    if api.connect():
-        return api
-    return None
 
 # 初始所有化策略环境，必须等待初始化完成才能继续
 # 初始化时只能使用同步接口，否则会出现报错：This event loop is already running
@@ -115,22 +111,31 @@ def handle_cancel_orders(api: IBapi, args):
         cancel_order_by_symbol_price(api, symbol, price)
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='命令行参数')
     parser.add_argument('account', type=str, choices=["real", "paper"], help='启动账户类型, real-真实账户、 paper-模拟账户')
     parser.add_argument('--cancel', nargs='+', help='取消订单，all-取消所有订单')
+    parser.add_argument('client', type=str, help='指定启动的客户端, tws-TWS, ib-IB GATEWAY')
+    parser.add_argument('--check', action='store_true', help='检查今天是不是交易日')
     args = parser.parse_args()
     # 注册信号退出事件
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, HandleExit)
         
     strategiesMap: Dict[str, any] = {}
+    
+    # 如果不是交易日直接退出
+    if args.check and not utils.is_us_stock_open():
+        print("today is not trading day. exiting...")
+        exit(0)
 
+    # print(args.client)
+    # print(args.account)
+    manager = IBClientManager(args.client, args.account)
     print(f"************************** Auto Trading System Starting **************************")
     try:
         # 组装、连接api，使api与策略解耦
-        api = GetApi(args.account == 'real')
+        api = manager.start_and_connect()
         if not api:
             print("System Error: Connect to IBKR FAIL, Aborting.....")
         else:
@@ -145,7 +150,8 @@ if __name__ == "__main__":
         traceback.print_exc()
     finally:
         # 关闭连接
-        api.disconnect()
+        manager.disconnect_and_quit()
+        time.sleep(5)
         print(f"************************** Auto Trading System Exited! **************************")
 
     

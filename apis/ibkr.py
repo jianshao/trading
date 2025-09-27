@@ -129,7 +129,7 @@ class IBapi(BaseAPI):
     # --- Internal IB Event Handlers (Delegating to registered handlers) ---
     async def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract: Optional[any] = None):
         # Filter out common informational messages or handle them differently
-        info_codes = [2104, 2106, 2108, 2158, 2103, 2105, 1100, 1101, 1102, 2100, 2107, 2157, 2168, 2169, 2170]
+        info_codes = [202, 2104, 2106, 2108, 2158, 2103, 2105, 1100, 1101, 1102, 2100, 2107, 2157, 2168, 2169, 2170]
         # 200: No security definition found (can be an error for reqContractDetails)
         # 321: Error validating request (e.g. bad generic tick list)
         if errorCode in info_codes:

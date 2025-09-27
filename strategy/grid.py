@@ -38,6 +38,7 @@ class GridUnit:
     completed_count: int = 0
     status: str = field(default="INACTIVE") # INACTIVE, ACTIVE, COMPLETED
     initialized: bool = field(default=False) # 是否已经初始化过
+    lock = asyncio.Lock()
     
     def to_dict(self) -> Dict[str, Any]:
         """将 GridUnit 对象转换为字典"""
@@ -330,8 +331,9 @@ class GridStrategy(Strategy):
                     self.grid_deactive(unit)
             else:
                 # 在核心区内的网格保持订单
-                if unit.status == "INACTIVE":
-                    await self.grid_active(unit, price <= current_price)
+                async with unit.lock:
+                    if unit.status == "INACTIVE":
+                        await self.grid_active(unit, price <= current_price)
         self.show_grid_units()
 
     # 根据订单情况决定优化的股数，针对价值属性高的标的可以逐步建仓。
@@ -779,20 +781,20 @@ class GridStrategy(Strategy):
         else:
             LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"grid_active", content=f"Recovering Activating Grid Unit: {unit.price} Qty: {unit.quantity}")
             # 没有开仓单或者开仓单已完成或者开仓单已挂单的不需要挂新单
-            if unit.open_order and unit.open_order.status not in [OrderStatus.Completed, OrderStatus.Created, OrderStatus.Submitted]:
+            if unit.open_order and unit.open_order.status not in [OrderStatus.Completed]:
                 order = await self.grid_open(unit, unit.open_order.action)
                 if order:
                     unit.open_order = order
                     self.order_id_2_unit[order.order_id] = unit
             
             # 平仓单同理
-            if unit.close_order and unit.close_order.status not in [OrderStatus.Completed, OrderStatus.Created, OrderStatus.Submitted]:
+            if unit.close_order and unit.close_order.status not in [OrderStatus.Completed]:
                 order = await self.grid_close(unit, unit.close_order.action)
                 if order:
                     unit.close_order = order
                     self.order_id_2_unit[order.order_id] = unit
-                
         unit.status = "ACTIVE"
+            
         return
     
     def grid_deactive(self, unit: GridUnit):
@@ -855,7 +857,7 @@ class GridStrategy(Strategy):
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Recovered position from logs. Position: {self.init_position}, Total Cost: {self.init_cash}")
 
     # 从文件中恢复当前生效的网格单元
-    async def recover_units_from_file(self, old_units: List[GridUnit]):
+    async def recover_units_from_file(self, old_units: List[GridUnit], curr_market_price: float):
         """从文件中恢复网格单元"""
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Recovering {len(old_units)} grid units from file.")
         for unit in old_units:
@@ -871,7 +873,7 @@ class GridStrategy(Strategy):
             # 对于已激活的网格，重新提交未完成的订单
             if curr_unit.status == "ACTIVE":
                 # 这里传入的isbuy参数无所谓，主要是为了触发网格激活逻辑
-                await self.grid_active(curr_unit, True)
+                await self.grid_active(curr_unit, curr_unit.price <= curr_market_price)
 
 
     async def active_units_initialized(self, current_market_price: float):
@@ -900,7 +902,7 @@ class GridStrategy(Strategy):
             if not units or len(units) == 0:
                 await self.active_units_initialized(current_market_price)
             else:
-                await self.recover_units_from_file(units)
+                await self.recover_units_from_file(units, current_market_price)
 
         except FileNotFoundError:
             LoggerManager.Error("app", strategy=f"{self.strategy_id}", event=f"init", content=f"No pending grid cycles file ('{file_path}'). Starting fresh for this strategy.")
@@ -949,6 +951,10 @@ class GridStrategy(Strategy):
         for unit in self.grid_definitions.values():
             # 只保存已开启但未完成的网格单元，比如有平仓单或开仓单已完成
             if unit.status == "ACTIVE" or (unit.open_order and unit.open_order.status in [OrderStatus.Completed]) or unit.close_order:
+                if unit.open_order and unit.open_order.status in [OrderStatus.Created, OrderStatus.Submitted]:
+                    unit.open_order.status = OrderStatus.Cancelled
+                if unit.close_order and unit.close_order.status in [OrderStatus.Created, OrderStatus.Submitted]:
+                    unit.close_order.status = OrderStatus.Cancelled
                 active_to_save.append(unit.to_dict())
         
         # 如果没有未完成的网格单元，说明出错了，不需要保存
