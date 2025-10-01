@@ -138,6 +138,8 @@ class GridStrategy(Strategy):
         self.profit_logs = []
         self.start_time = None
         
+        self.lock = asyncio.Lock()
+        
         
 
     def __str__(self):
@@ -331,9 +333,8 @@ class GridStrategy(Strategy):
                     self.grid_deactive(unit)
             else:
                 # 在核心区内的网格保持订单
-                async with unit.lock:
-                    if unit.status == "INACTIVE":
-                        await self.grid_active(unit, price <= current_price)
+                if unit.status == "INACTIVE":
+                    await self.grid_active(unit, price <= current_price)
         self.show_grid_units()
 
     # 根据订单情况决定优化的股数，针对价值属性高的标的可以逐步建仓。
@@ -829,15 +830,16 @@ class GridStrategy(Strategy):
             LoggerManager.Error("order", strategy=f"{self.strategy_id}", event=f"order_update", content=f"Unknown order ref: {order.order_id} @{order.lmt_price} {order.shares}.")
             return
         
-        # 判断订单状态
-        # 如果是取消订单，针对原订单是建仓单还是平仓单做不同处理
-        if order.status in [OrderStatus.Canceled, OrderStatus.Cancelled]:
-            self.handle_order_cancelled(order)
-        
-        # 如果是订单成交，更新持仓和资金，执行对应网格的挂单
-        # 使用成交订单的限制价格刷新网格，主要是更新网格生效范围
-        if order.status in [OrderStatus.Completed]:
-            await self.handle_order_dealed(order)
+        async with self.lock:
+            # 判断订单状态
+            # 如果是取消订单，针对原订单是建仓单还是平仓单做不同处理
+            if order.status in [OrderStatus.Canceled, OrderStatus.Cancelled]:
+                self.handle_order_cancelled(order)
+            
+            # 如果是订单成交，更新持仓和资金，执行对应网格的挂单
+            # 使用成交订单的限制价格刷新网格，主要是更新网格生效范围
+            if order.status in [OrderStatus.Completed]:
+                await self.handle_order_dealed(order)
         
             
     def recover_curr_position(self):
