@@ -1000,6 +1000,7 @@ class GridStrategy(Strategy):
         # utils.daily_profit(dates[-22:], profits[-22:], title=f"Strategy {self.strategy_id} Daily Profits")
         
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"profit_summy", content=f"Pos: {self.position} Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Pending: Buy({self.pending_buy_count}, {self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})")
+        # 发送微信通知，每日盈利情况
         return {"spacing_ratio": self.price_growth_ratio, "position_sizing_ratio": self.cost_growth_ratio, "net_profit": round(self.net_profit, 2)}
 
     def daily_summy(self, date_str: str) -> str:

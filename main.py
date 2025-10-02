@@ -33,29 +33,28 @@ is_running: bool = False
 
 # 初始所有化策略环境，必须等待初始化完成才能继续
 # 初始化时只能使用同步接口，否则会出现报错：This event loop is already running
-def InitStrategies(api: IBapi, strategies: Dict[str, Strategy], real: bool) -> bool:
+def InitStrategies(api: IBapi, real: bool) -> GridStrategyEngine | None:
     # grid 策略
     if not real:
         filename = "data/paper/strategies/"
     else:
         filename = "data/real/strategies/"
-    grid = GridStrategyEngine(api, filename)
-    grid.InitStrategy()
-    strategies[STRATEGY_GRID] = grid
+    engine = GridStrategyEngine(api, filename)
+    if engine.InitStrategy():
+        return engine
     
-    return True
+    return None
 
 
-def StopStrategies(strategies: Dict[str, Strategy]):
+def StopStrategies(engine: GridStrategyEngine):
     print("Stop all Strategies: ")
-    if STRATEGY_GRID in strategies:
-        grid = strategies[STRATEGY_GRID]
-        grid.DoStop()
+    engine.DoStop()
     
     print("All Strategies Exited!")
 
 def handle_strategies(api: IBapi, args):
-    if not InitStrategies(api, strategiesMap, args.account == 'real'):
+    engine = InitStrategies(api, args.account == 'real')
+    if not engine:
         print("Initializing Strategies Failed, Aborting...")
     else:
         # 使用纯同步方式，否则会有以下问题
@@ -65,8 +64,8 @@ def handle_strategies(api: IBapi, args):
         is_running = True
         
         now = datetime.datetime.now()
-        # 构造"明天早上 5 点"的 datetime 对象
-        next_day_5am = datetime.datetime.combine(now.date() + timedelta(days=1), datetime.datetime.min.time()) + timedelta(hours=5)
+        # 构造"明天早上7点30分"的 datetime 对象
+        next_day_5am = datetime.datetime.combine(now.date() + timedelta(days=1), datetime.datetime.min.time()) + timedelta(hours=7, minutes=30)
 
         # 计算时间差
         delta = (next_day_5am - now).seconds
@@ -77,7 +76,7 @@ def handle_strategies(api: IBapi, args):
             # 发送心跳，通知其他部分
         
         # 退出所有策略
-        StopStrategies(strategiesMap)
+        StopStrategies(engine)
 
 
 def HandleExit(signum, frame):
@@ -122,7 +121,6 @@ if __name__ == "__main__":
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, HandleExit)
         
-    strategiesMap: Dict[str, any] = {}
     
     # 如果不是交易日直接退出
     if args.check and not utils.is_us_stock_open():
