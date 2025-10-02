@@ -59,16 +59,16 @@ class GridStrategyEngine:
             num_when_optimize = param.get('num_when_optimize', 1)
             init_cash = param.get("init_cash", 10000)  # Default cash if not provided
             init_position = param.get("init_position", 0)  # Default position if not provided
-            max_orders = param.get("max_orders", 0)  # Default max orders if not provided
+            send_email = param.get("send_email", False)  # Default max orders if not provided
             
             strategy_id = f"GRID_{unique_tag}_{symbol}"
             grid = GridStrategy(self.api, strategy_id, symbol, 
                                 base_price, lower, upper, 
                                 cost_per_grid, proportion, 
-                                max_orders=max_orders,
                                 spacing_ratio=spacing_ratio,
                                 get_order_id=self.get_register_order_id_strategy_id,
                                 do_optimize=do_optimize, num_when_optimize=num_when_optimize,
+                                send_email=send_email,
                                 data_file=self.data_dir + "grid/" + data_file)
             self.strategy_params[strategy_id] = grid
 

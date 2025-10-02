@@ -12,7 +12,7 @@ import pandas as pd
 
 from strategy.common import OrderStatus, GridOrder, LiveGridCycle
 from strategy.strategy import Strategy
-from utils import utils
+from utils import mail, utils
 from utils.logger_manager import LoggerManager
 
 if __name__ == '__main__': # Allow running/importing from different locations
@@ -79,13 +79,13 @@ class GridUnit:
         return "{" + f" @{self.price}, quantity: {self.quantity}" + "}"
         
 class GridStrategy(Strategy):
-    def __init__(self, api: BaseAPI, strategy_id, symbol: str,
+    def __init__(self, api: BaseAPI, strategy_id: str, symbol: str,
                  base_price: float, lowwer: float, upper: float, # 网格上下限
                  cost_per_grid: float, space_propor: float = 0.01,
-                 max_orders: int = 0, # 最大单方向同时挂单数
                  spacing_ratio: float = 0, # 按比例增大网格价差，1.0为价差不变
                  position_sizing_ratio: float = 0, # 按比例增加每网格成本，1.0为成本不变
                  do_optimize: bool = False, num_when_optimize: int = 1,
+                 send_email: bool = False,  # 发送邮件通知
                  get_order_id: Callable[[str], int] = None, data_file: str = "data/strategies/grid"): # For initial setup only
         self.data_file = data_file
         
@@ -99,11 +99,11 @@ class GridStrategy(Strategy):
         self.upper_bound = upper
         self.space_propor = space_propor
         self.cost_per_grid = cost_per_grid  # 单网格成本
-        self.max_orders = max_orders  # 最大单方向同时挂单数，0为不限制
         self.num_when_optimize = num_when_optimize  # 当开启优化选项时单次多买入或少卖出多少股
         self.do_optimize = do_optimize  # 是否开启优化，开启优化后可以逐步建仓。
         self.price_growth_ratio = spacing_ratio # 网格价差增长的比例，1.0为不增长
         self.cost_growth_ratio = position_sizing_ratio # 每个网格股数增长比例，1为不变化
+        self.send_email = send_email  # 是否发送邮件通知
         self.primary_exchange = "NASDAQ"
         # 上层传入的获取本地关联order_id，并且关联到对应策略的方法
         self.get_order_id: Callable[[str], int] = get_order_id
@@ -1001,6 +1001,10 @@ class GridStrategy(Strategy):
         
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"profit_summy", content=f"Pos: {self.position} Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Pending: Buy({self.pending_buy_count}, {self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})")
         # 发送微信通知，每日盈利情况
+        if self.send_email:
+            subject = f"每日盈利-{self.strategy_id}-{datetime.datetime.now().strftime('%Y-%m-%d')}"
+            body = f"今日盈利: {round(self.net_profit, 2)} 完成单数: {self.completed_count}\n当前持仓: {self.position} 可用资金: {round(self.cash, 2)}"
+            mail.send_email(subject, body)
         return {"spacing_ratio": self.price_growth_ratio, "position_sizing_ratio": self.cost_growth_ratio, "net_profit": round(self.net_profit, 2)}
 
     def daily_summy(self, date_str: str) -> str:
