@@ -1002,7 +1002,7 @@ class GridStrategy(Strategy):
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"profit_summy", content=f"Pos: {self.position} Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Pending: Buy({self.pending_buy_count}, {self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})")
         # 发送微信通知，每日盈利情况
         if self.send_email:
-            subject = f"每日盈利-{self.strategy_id}-{datetime.datetime.now().strftime('%Y-%m-%d')}"
+            subject = f"每日盈利-{self.strategy_id}-{datetime.datetime.now().strftime('%Y%m%d')}"
             body = f"今日盈利: {round(self.net_profit, 2)} 完成单数: {self.completed_count}\n当前持仓: {self.position} 可用资金: {round(self.cash, 2)}"
             mail.send_email(subject, body)
         return {"spacing_ratio": self.price_growth_ratio, "position_sizing_ratio": self.cost_growth_ratio, "net_profit": round(self.net_profit, 2)}

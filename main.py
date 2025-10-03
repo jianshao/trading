@@ -33,7 +33,7 @@ is_running: bool = False
 
 # 初始所有化策略环境，必须等待初始化完成才能继续
 # 初始化时只能使用同步接口，否则会出现报错：This event loop is already running
-def InitStrategies(api: IBapi, real: bool) -> GridStrategyEngine | None:
+def InitStrategies(api: IBapi, real: bool) -> GridStrategyEngine:
     # grid 策略
     if not real:
         filename = "data/paper/strategies/"

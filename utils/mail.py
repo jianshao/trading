@@ -13,14 +13,16 @@ def send_email(subject: str, body: str):
     """
     # 构造邮件
     msg = MIMEText(body, "plain", "utf-8")
-    msg["From"] = Header("交易系统", "utf-8")  # 显示发件人昵称
-    msg["To"] = Header("投资人", "utf-8")     # 显示收件人昵称
+    msg["From"] = Header(f"profits <{sender_email}>", "ascii")
+    msg["To"] = Header(f"owner <{receiver_email}>", "ascii")
     msg["Subject"] = Header(subject, "utf-8")
 
     # 发送邮件
     try:
-        with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
+        with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
             server.login(sender_email, auth_code)
             server.sendmail(sender_email, [receiver_email], msg.as_string())
+
     except Exception as e:
-        LoggerManager.Error("app", strategy="mail", event="send_email", content=f"Email sent to {receiver_email} with subject: {subject}")
+        # print(f"{subject} 发送失败: {e}")
+        LoggerManager.Error("app", strategy="mail", event="send_email", content=f"Email sent to {receiver_email} with subject: {subject} failed. Error: {e}")
