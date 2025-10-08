@@ -104,7 +104,9 @@ class GridStrategyBT(bt.Strategy):
         #     self.today = date_str
         if self.today != date_str:
             self.today = date_str
-            summy_str = self.grid.daily_summy(date_str)
+            summy = self.grid.DailySummary(date_str)
+            params = summy.params
+            summy_str = f"Profit: {summy.profits:.2f}, Completed: {params.completed_count}, Pending: Buy({params.pending_buy_count}), Sell({params.pending_sell_count})"
             self.log(f"{self.broker.get_value():>8.2f} Cash: {round(self.broker.get_cash(), 2):>8.2f}, Pos: {self.position.size:>3}, " + summy_str, level=1)
     
     # 当前bar的数据执行之后才会调用next()

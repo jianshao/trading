@@ -1,4 +1,4 @@
-from strategy.common import GridOrder
+from strategy.common import DailyProfitSummary, GridOrder
 
 
 class Strategy:
@@ -9,6 +9,9 @@ class Strategy:
         pass
       
     def Reconnect(self, **kwargs):
+        pass
+    
+    def DailySummary(self, date_str: str) -> DailyProfitSummary:
         pass
     
     async def update_order_status(self, order: GridOrder):

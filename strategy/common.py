@@ -187,3 +187,65 @@ def convert_trade_to_gridorder(trade: ib_insync.Trade) -> GridOrder:
         grid_order.done_time = datetime.datetime.now()
 
     return grid_order
+
+class DailyProfitSummary:
+    """
+    每日盈利总结
+    """
+    def __init__(self, strategy: str, strategy_name: str, profits: float, position: float, cash: float, date: str, params: dict = None):
+        self.date = datetime.datetime.now().strftime("%Y%m%d") if not date else date
+        self.strategy = strategy
+        self.strategy_name = strategy_name
+        self.profits = profits
+        self.position = position
+        self.cash = cash
+        self.params = params
+
+
+def generate_html(summaries: list[DailyProfitSummary]) -> str:
+    """生成HTML格式日报"""
+    total_profit = sum(s.profits for s in summaries)
+    total_color = "green" if total_profit >= 0 else "red"
+    total_str = f"{total_profit:+.2f}"
+
+    html = """
+    <html><body>
+    <h2>📊 策略每日收益汇总报告</h2>
+    <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;font-family:Arial;font-size:14px;">
+    <tr style="background-color:#f2f2f2;">
+        <th>日期</th><th>策略名</th><th>当日收益</th><th>仓位</th><th>现金余额</th>
+    </tr>
+    """
+
+    for s in summaries:
+        profit_color = "green" if s.profits >= 0 else "red"
+        profit_str = f"{s.profits:+.2f}"
+        html += f"""
+        <tr>
+            <td>{s.date}</td>
+            <td>{s.strategy_name}</td>
+            <td style="color:{profit_color};font-weight:bold;">{profit_str}</td>
+            <td>{s.position:.0f}</td>
+            <td>${s.cash:,.2f}</td>
+        </tr>
+        """
+
+    html += f"""
+    </table>
+    <h3>💰 总收益：<span style="color:{total_color};">{total_str}</span></h3>
+    """
+
+    # 若策略附加参数存在，则追加展示
+    html += "<h4>📋 策略参数详情：</h4>"
+    for s in summaries:
+        if not s.params:
+            continue
+        if s.strategy in ["grid"]:
+            html += f"<b>{s.strategy_name}</b><ul>"
+            html += f"<li><b>网格完成量</b>：{s.params.get('completed_count', 0)}</li>"
+            html += f"<li><b>买单挂单</b>：{s.params.get('pending_buy_count', 0)}</li>"
+            html += f"<li><b>卖单挂单</b>：{s.params.get('pending_sell_count', 0)}</li>"
+            html += "</ul>"
+
+    html += "</body></html>"
+    return html

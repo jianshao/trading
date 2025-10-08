@@ -11,6 +11,7 @@ from apis.api import BaseAPI
 from strategy import common
 from strategy.strategy import Strategy
 from strategy.grid import GridStrategy
+from utils import mail
 from utils.logger_manager import LoggerManager
 
 WATCHLIST_FILE = "watchlist_grid_config.json"  # For symbols and their daily params
@@ -183,7 +184,7 @@ class GridStrategyEngine:
         # ... (Your existing handle_fill_async logic for detailed logging) ...
         pass
 
-    def DoStop(self) -> Dict[str, Any]:
+    def DoStop(self):
         """
         停止策略执行:
         1. 将未完成的订单 (active_grid_trades) 记录到文件中。
@@ -193,19 +194,20 @@ class GridStrategyEngine:
         self._log(f"Strategy Engine Stop Running...", level=1)
         self.is_running = False
         
+        profits_summary = []
+        today_str = datetime.datetime.now().strftime("%Y%m%d")
         for strategy_id, params in self.strategy_params.items() or {}:
+            summary = params.DailySummary(today_str)
+            if summary:
+                profits_summary.append(params.DailySummary(today_str))
             self.strategy_result[strategy_id] = params.DoStop()
-                
-        self._log(f"All Strategies Stopped.", level=1)
-        result = []
-        for sid, item in self.strategy_result.items():
-            result.append({"grid_type": item.get("grid_type", "classic"),
-                           "strategy_id": sid.split("_")[2], 
-                           "proportion": item.get("proportion", 0),
-                           "net_profit": item.get("net_profit", 0)})
+
+        # 发送日报邮件
+        mail.send_email(f"[每日收益报告] {today_str}", common.generate_html(profits_summary))
         
+        self._log(f"All Strategies Stopped.", level=1)
         self._log(f"Strategy Engine Stop Running Done.", level=1)
-        return self.strategy_result
+        return 
         
     def read_json_file(self, filename: str, proc: Callable[[Dict[Any, Any]], bool]):
         try:

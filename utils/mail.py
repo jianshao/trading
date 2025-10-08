@@ -12,7 +12,7 @@ def send_email(subject: str, body: str):
     :return: None
     """
     # 构造邮件
-    msg = MIMEText(body, "plain", "utf-8")
+    msg = MIMEText(body, "html", "utf-8")
     msg["From"] = Header(f"profits <{sender_email}>", "ascii")
     msg["To"] = Header(f"owner <{receiver_email}>", "ascii")
     msg["Subject"] = Header(subject, "utf-8")

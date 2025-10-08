@@ -10,9 +10,9 @@ import time
 from typing import Dict, List, Any, Optional, Tuple, Callable
 import pandas as pd
 
-from strategy.common import OrderStatus, GridOrder, LiveGridCycle
+from strategy.common import DailyProfitSummary, OrderStatus, GridOrder
 from strategy.strategy import Strategy
-from utils import mail, utils
+from utils import mail
 from utils.logger_manager import LoggerManager
 
 if __name__ == '__main__': # Allow running/importing from different locations
@@ -117,9 +117,6 @@ class GridStrategy(Strategy):
         # --- State Management (mostly unchanged, but now uses dynamic shares) ---
         # 运行时数据
         self.grid_definitions: Dict[Any, GridUnit] = {}
-        self.open_orders: Dict[Any, LiveGridCycle] = {}
-        self.close_orders: Dict[Any, LiveGridCycle] = {}
-        self.pending_orders: Dict[Any, GridOrder] = {}
         self.order_id_2_unit: Dict[Any, GridUnit] = {}
         
         self.optimize_shares = 0
@@ -1000,29 +997,16 @@ class GridStrategy(Strategy):
         # utils.daily_profit(dates[-22:], profits[-22:], title=f"Strategy {self.strategy_id} Daily Profits")
         
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"profit_summy", content=f"Pos: {self.position} Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Pending: Buy({self.pending_buy_count}, {self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})")
-        # 发送微信通知，每日盈利情况
-        if self.send_email:
-            subject = f"每日盈利-{self.strategy_id}-{datetime.datetime.now().strftime('%Y%m%d')}"
-            body = f"今日盈利: {round(self.net_profit, 2)} 完成单数: {self.completed_count}\n当前持仓: {self.position} 可用资金: {round(self.cash, 2)}"
-            mail.send_email(subject, body)
         return {"spacing_ratio": self.price_growth_ratio, "position_sizing_ratio": self.cost_growth_ratio, "net_profit": round(self.net_profit, 2)}
 
-    def daily_summy(self, date_str: str) -> str:
-        pending_buy_order_count_map = {}
-        pending_sell_order_count_map = {}
-        for ref, cycle in self.close_orders.items():
-            order = cycle.open_order
-            price, shares = round(order.lmt_price), order.shares
-            if not order.isbuy():
-                if price not in pending_buy_order_count_map.keys():
-                    pending_buy_order_count_map[price] = 0
-                pending_buy_order_count_map[price] += abs(shares)
-            else:
-                if price not in pending_sell_order_count_map.keys():
-                    pending_sell_order_count_map[price] = 0
-                pending_sell_order_count_map[price] += abs(shares)
-        
-        avg = 0
-        if self.completed_count:
-            avg = round(self.net_profit/self.completed_count, 2)
-        return f"Completed: {self.completed_count:>3}, Profit: {round(self.net_profit, 2):>7.2f}, Pending: Buy({self.pending_buy_count:>3}, {self.pending_buy_cost:>8.2f}) Sell({self.pending_sell_count:>3}, {self.pending_sell_cost:>8.2f})"
+    # 每日总结
+    def DailySummary(self, date_str: str) -> DailyProfitSummary:
+        """返回每日盈利总结字符串"""
+        params = {
+            "completed_count": self.completed_count,
+            "pending_buy_count": self.pending_buy_count,
+            "pending_buy_cost": round(self.pending_buy_cost, 2),
+            "pending_sell_count": self.pending_sell_count,
+            "pending_sell_cost": round(self.pending_sell_cost, 2)
+        }
+        return DailyProfitSummary("grid", self.strategy_id, self.net_profit, position=self.position, cash=self.cash, date=date_str, params=params)
