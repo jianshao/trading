@@ -372,7 +372,7 @@ class GridStrategy(Strategy):
         if self.get_order_id:
             order_id = self.get_order_id(self.strategy_id)
         
-        order = await self.api.place_limit_order(self.symbol, "BUY", quantity=size, limit_price=price, tif="DAY", order_id_to_use=order_id)
+        order = await self.api.place_limit_order(self.symbol, "BUY", quantity=size, limit_price=price, tif="DAY", order_id_to_use=order_id, order_ref=f"{self.strategy_id}")
         if order:
             self.pending_buy_count += abs(size)
             self.pending_buy_cost = round(self.pending_buy_cost + cost, 2)
@@ -390,7 +390,7 @@ class GridStrategy(Strategy):
         if self.get_order_id:
             order_id = self.get_order_id(self.strategy_id)
 
-        sell_order = await self.api.place_limit_order(self.symbol, "SELL", quantity=size, limit_price=price, tif="DAY", order_id_to_use=order_id)
+        sell_order = await self.api.place_limit_order(self.symbol, "SELL", quantity=size, limit_price=price, tif="DAY", order_id_to_use=order_id, order_ref=f"{self.strategy_id}")
         if sell_order:
             self.pending_sell_count += abs(size)
             self.pending_sell_cost = round(self.pending_sell_cost + abs(price * size), 2)
