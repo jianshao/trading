@@ -130,6 +130,7 @@ class GridStrategy(Strategy):
         
         self.completed_count = 0
         self.net_profit = 0
+        self.extra_profit = 0
         self.total_cost = 0
         
         self.profit_logs = []
@@ -416,6 +417,7 @@ class GridStrategy(Strategy):
         
         # 计算净利润
         gross_profit = abs(round((close_order.done_price - open_order.done_price) * close_order.done_shares, 2))
+        base_profit = abs(round((close_order.lmt_price - open_order.lmt_price) * close_order.done_shares, 2))
         log_entry["gross_profit"] = gross_profit
         net_profit = round(gross_profit - 2*close_order.fee, 2)
         log_entry["net_profit"] = net_profit
@@ -424,6 +426,7 @@ class GridStrategy(Strategy):
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="grid_cycle_completed", content=content)
         
         self.net_profit += net_profit
+        self.extra_profit += (net_profit - base_profit)
         self.completed_count += 1
         # unit.completed_count += 1
         # self.total_open_cost_time += round((cycle.open_done_time - cycle.open_apply_time))
@@ -879,10 +882,13 @@ class GridStrategy(Strategy):
         """初始激活网格单元"""
         down_level, up_level = self._get_valid_units_range(current_market_price)
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Initializing grid units in range: {down_level} - {up_level}")
-        for price, unit in self.grid_definitions.items():
-            # 价格在当前价格的上下4个网格范围内的网格单元激活
-            if down_level <= price <= up_level:
-                await self.grid_active(unit, price <= current_market_price)
+        buy_unit = sorted([u for u in self.grid_definitions.values() if u.price <= current_market_price], key=lambda x: x.price, reverse=True)[:5]
+        for unit in buy_unit:
+            await self.grid_active(unit, True)
+            
+        sell_unit = sorted([u for u in self.grid_definitions.values() if u.price > current_market_price], key=lambda x: x.price)[:5]
+        for unit in sell_unit:
+            await self.grid_active(unit, False)
 
 
     # 从文件中读取历史未完成的平仓单，直接挂单，不再参与网格策略
@@ -948,6 +954,9 @@ class GridStrategy(Strategy):
         # 把pending orders中未完成的部分也写入到文件
         active_to_save = []
         for unit in self.grid_definitions.values():
+            if not unit.open_order and not unit.close_order:
+                continue
+            
             # 只保存已开启但未完成的网格单元，比如有平仓单或开仓单已完成
             if unit.status == "ACTIVE" or (unit.open_order and unit.open_order.status in [OrderStatus.Completed]) or unit.close_order:
                 if unit.open_order and unit.open_order.status in [OrderStatus.Created, OrderStatus.Submitted]:
@@ -1003,6 +1012,7 @@ class GridStrategy(Strategy):
     def DailySummary(self, date_str: str) -> DailyProfitSummary:
         """返回每日盈利总结字符串"""
         params = {
+            "extra_price": self.extra_profit,
             "completed_count": self.completed_count,
             "pending_buy_count": self.pending_buy_count,
             "pending_buy_cost": round(self.pending_buy_cost, 2),

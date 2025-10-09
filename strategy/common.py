@@ -242,6 +242,7 @@ def generate_html(summaries: list[DailyProfitSummary]) -> str:
             continue
         if s.strategy in ["grid"]:
             html += f"<b>{s.strategy_name}</b><ul>"
+            html += f"<li><b>跳开利润</b>：{s.params.get('extra_price', 0)}</li>"
             html += f"<li><b>网格完成量</b>：{s.params.get('completed_count', 0)}</li>"
             html += f"<li><b>买单挂单</b>：{s.params.get('pending_buy_count', 0)}</li>"
             html += f"<li><b>卖单挂单</b>：{s.params.get('pending_sell_count', 0)}</li>"
