@@ -426,7 +426,7 @@ class GridStrategy(Strategy):
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="grid_cycle_completed", content=content)
         
         self.net_profit += net_profit
-        self.extra_profit += (net_profit - base_profit)
+        self.extra_profit += (gross_profit - base_profit)
         self.completed_count += 1
         # unit.completed_count += 1
         # self.total_open_cost_time += round((cycle.open_done_time - cycle.open_apply_time))
@@ -1012,7 +1012,7 @@ class GridStrategy(Strategy):
     def DailySummary(self, date_str: str) -> DailyProfitSummary:
         """返回每日盈利总结字符串"""
         params = {
-            "extra_price": self.extra_profit,
+            "extra_price": round(self.extra_profit, 2),
             "completed_count": self.completed_count,
             "pending_buy_count": self.pending_buy_count,
             "pending_buy_cost": round(self.pending_buy_cost, 2),
