@@ -192,7 +192,7 @@ class DailyProfitSummary:
     """
     每日盈利总结
     """
-    def __init__(self, strategy: str, strategy_name: str, profits: float, position: float, cash: float, date: str, params: dict = None):
+    def __init__(self, strategy: str, strategy_name: str, profits: float, position: float, cash: float, date: str, params: dict = None, start_time: datetime.datetime = None, end_time: datetime.datetime = None):
         self.date = datetime.datetime.now().strftime("%Y%m%d") if not date else date
         self.strategy = strategy
         self.strategy_name = strategy_name
@@ -200,6 +200,8 @@ class DailyProfitSummary:
         self.position = position
         self.cash = cash
         self.params = params
+        self.start_time = start_time
+        self.end_time = end_time
 
 
 def generate_html(summaries: list[DailyProfitSummary]) -> str:

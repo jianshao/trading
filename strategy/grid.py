@@ -136,6 +136,9 @@ class GridStrategy(Strategy):
         self.profit_logs = []
         self.start_time = None
         
+        self.start_time = datetime.datetime.now()
+        self.end_time = datetime.datetime.now()
+        self.is_running = False
         self.lock = asyncio.Lock()
         
         
@@ -600,6 +603,8 @@ class GridStrategy(Strategy):
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"价格基线：{self.base_price}, 价格范围：[{self.lower_bound}, {self.upper_bound}], 单格投入：{self.cost_per_grid} 单格价差：{self.space_propor*100:.1f}%")
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash} 是否开启优化：{self.do_optimize} 优化股数：{self.num_when_optimize}")
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Running.")
+        self.is_running = True
+        self.start_time = datetime.datetime.now()
         
         return 
 
@@ -821,6 +826,9 @@ class GridStrategy(Strategy):
         Handles order status notifications.
         MODIFIED: It now correctly calculates the closing target for dynamic spacing.
         """
+        while self.is_running is False:
+            await asyncio.sleep(1)
+            
         if order.status in [OrderStatus.Submitted, OrderStatus.Accepted]:
             return
         
@@ -999,12 +1007,8 @@ class GridStrategy(Strategy):
             if unit.close_order:
                 cancel_tasks.append(self.api.cancel_order(unit.close_order))
         time.sleep(2)  # 等待订单取消完成
-
-        # 使用图表显示每日盈利
-        # dates = [log['start_time'][5:10] for log in self.profit_logs]
-        # profits = [log['profit'] for log in self.profit_logs]
-        # utils.daily_profit(dates[-22:], profits[-22:], title=f"Strategy {self.strategy_id} Daily Profits")
         
+        self.end_time = datetime.datetime.now()
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"profit_summy", content=f"Pos: {self.position} Completed: {self.completed_count}, Profit: {round(self.net_profit, 2)}, Pending: Buy({self.pending_buy_count}, {self.pending_buy_cost}) Sell({self.pending_sell_count}, {self.pending_sell_cost})")
         return {"spacing_ratio": self.price_growth_ratio, "position_sizing_ratio": self.cost_growth_ratio, "net_profit": round(self.net_profit, 2)}
 
@@ -1019,4 +1023,4 @@ class GridStrategy(Strategy):
             "pending_sell_count": self.pending_sell_count,
             "pending_sell_cost": round(self.pending_sell_cost, 2)
         }
-        return DailyProfitSummary("grid", self.strategy_id, self.net_profit, position=self.position, cash=self.cash, date=date_str, params=params)
+        return DailyProfitSummary("grid", self.strategy_id, self.net_profit, position=self.position, cash=self.cash, date=date_str, params=params, start_time=self.start_time, end_time=self.end_time)

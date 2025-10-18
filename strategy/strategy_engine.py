@@ -6,6 +6,7 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+import clickhouse_connect
 import pandas as pd
 from apis.api import BaseAPI
 from strategy import common
@@ -13,6 +14,7 @@ from strategy.strategy import Strategy
 from strategy.grid import GridStrategy
 from utils import mail
 from utils.logger_manager import LoggerManager
+import data.config as config
 
 WATCHLIST_FILE = "watchlist_grid_config.json"  # For symbols and their daily params
 
@@ -147,6 +149,13 @@ class GridStrategyEngine:
         self.next_order_id_counter = initial_ib_order_id
         self._log(f"Initialize Order Id Done: {self.next_order_id_counter}.", level=0)
 
+        self.client = clickhouse_connect.get_client(
+            host=config.clickhouse_host,
+            port=config.clickhouse_port,
+            username=config.clickhouse_user,
+            password=config.clickhouse_password,
+            database=config.clickhouse_database
+        )
         self._log(f"Strategy Engine Initialize Completed.", level=1)
         return True
 
@@ -195,11 +204,16 @@ class GridStrategyEngine:
         self.is_running = False
         
         profits_summary = []
+        today = datetime.datetime.now()
         today_str = datetime.datetime.now().strftime("%Y%m%d")
         for strategy_id, params in self.strategy_params.items() or {}:
             summary = params.DailySummary(today_str)
             if summary:
-                profits_summary.append(params.DailySummary(today_str))
+                profits_summary.append(summary)
+                if self.client:
+                    values = [[today, strategy_id, summary.start_time, summary.end_time, summary.profits, json.dumps(summary.params)]]
+                    columns = ['date', 'strategy_id', 'start_time', 'end_time', 'profits', 'details']
+                    self.client.insert('profits', values, column_names=columns)
             self.strategy_result[strategy_id] = params.DoStop()
 
         # 发送日报邮件
