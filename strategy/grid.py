@@ -604,7 +604,6 @@ class GridStrategy(Strategy):
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash} 是否开启优化：{self.do_optimize} 优化股数：{self.num_when_optimize}")
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Running.")
         self.is_running = True
-        self.start_time = datetime.datetime.now()
         
         return 
 
@@ -1015,9 +1014,15 @@ class GridStrategy(Strategy):
     # 每日总结
     def DailySummary(self, date_str: str) -> DailyProfitSummary:
         """返回每日盈利总结字符串"""
+        self.end_time = datetime.datetime.now()
         params = {
+            "total_profit": round(self.net_profit, 2),
             "extra_price": round(self.extra_profit, 2),
             "completed_count": self.completed_count,
+            "before_position": round(self.init_position, 2),
+            "before_cash": round(self.init_cash, 2),
+            "after_position": round(self.position, 2),
+            "after_cash": round(self.cash, 2),
             "pending_buy_count": self.pending_buy_count,
             "pending_buy_cost": round(self.pending_buy_cost, 2),
             "pending_sell_count": self.pending_sell_count,
