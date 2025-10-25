@@ -981,7 +981,7 @@ class GridStrategy(Strategy):
             "start_time": self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
             "end_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "position": [round(self.init_position, 2), round(self.position, 2)],
-            "cash": [round(self.init_cash, 2), round(self.cash, 2)],
+            "cash": [round(self.init_cash, 2), round(self.cash + self.net_profit, 2)],
             "completed_count": self.completed_count,
             "profit": round(self.net_profit, 2),
         })
@@ -1022,7 +1022,7 @@ class GridStrategy(Strategy):
             "before_position": round(self.init_position, 2),
             "before_cash": round(self.init_cash, 2),
             "after_position": round(self.position, 2),
-            "after_cash": round(self.cash, 2),
+            "after_cash": round(self.cash + self.net_profit, 2),
             "pending_buy_count": self.pending_buy_count,
             "pending_buy_cost": round(self.pending_buy_cost, 2),
             "pending_sell_count": self.pending_sell_count,
