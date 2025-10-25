@@ -46,6 +46,8 @@ class GridStrategyEngine:
 
         self.client = None
         LoggerManager.init(log_configs, clickhouse_config)
+        self.start_time = datetime.datetime.now()
+        self.end_time = datetime.datetime.now()
 
 
     def _load_grid_strategies(self, params: List[Dict[Any, Any]]) -> bool:
@@ -150,6 +152,7 @@ class GridStrategyEngine:
         self.next_order_id_counter = initial_ib_order_id
         self._log(f"Initialize Order Id Done: {self.next_order_id_counter}.", level=0)
 
+        self.start_time = datetime.datetime.now()
         
         self._log(f"Strategy Engine Initialize Completed.", level=1)
         return True
@@ -201,25 +204,28 @@ class GridStrategyEngine:
         profits_summary = []
         today = datetime.datetime.now()
         today_str = datetime.datetime.now().strftime("%Y%m%d")
-        for strategy_id, params in self.strategy_params.items() or {}:
-            summary = params.DailySummary(today_str)
-            if summary:
-                profits_summary.append(summary)
-                if not self.client:
-                    self.client = clickhouse_connect.get_client(
-                        host=config.clickhouse_host,
-                        port=config.clickhouse_port,
-                        username=config.clickhouse_user,
-                        password=config.clickhouse_password,
-                        database=config.clickhouse_database
-                    )
-                values = [[today, strategy_id, summary.start_time, summary.end_time, summary.profits, json.dumps(summary.params)]]
-                columns = ['date', 'strategy_id', 'start_time', 'end_time', 'profits', 'details']
-                self.client.insert('profits', values, column_names=columns)
-            self.strategy_result[strategy_id] = params.DoStop()
+        if today > self.start_time + datetime.timedelta(minutes=10):
+            for strategy_id, params in self.strategy_params.items() or {}:
+                summary = params.DailySummary(today_str)
+                if summary:
+                    profits_summary.append(summary)
+                    if not self.client:
+                        self.client = clickhouse_connect.get_client(
+                            host=config.clickhouse_host,
+                            port=config.clickhouse_port,
+                            username=config.clickhouse_user,
+                            password=config.clickhouse_password,
+                            database=config.clickhouse_database
+                        )
+                    values = [[today, strategy_id, summary.start_time, summary.end_time, summary.profits, json.dumps(summary.params)]]
+                    columns = ['date', 'strategy_id', 'start_time', 'end_time', 'profits', 'details']
+                    self.client.insert('profits', values, column_names=columns)
+                self.strategy_result[strategy_id] = params.DoStop()
 
-        # 发送日报邮件
-        mail.send_email(f"[每日收益报告] {today_str}", common.generate_html(profits_summary))
+            # 发送日报邮件
+            mail.send_email(f"[每日收益报告] {today_str}", common.generate_html(profits_summary))
+        else:
+            mail.send_email(f"[出错了] {today_str}", "策略启动失败，需要人工处理。")
         
         self._log(f"All Strategies Stopped.", level=1)
         self._log(f"Strategy Engine Stop Running Done.", level=1)
