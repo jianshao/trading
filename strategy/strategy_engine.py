@@ -16,7 +16,6 @@ from utils import mail
 from utils.logger_manager import LoggerManager
 import data.config as config
 
-WATCHLIST_FILE = "watchlist_grid_config.json"  # For symbols and their daily params
 
 class GridStrategyEngine:
     def __init__(self, ib_api: BaseAPI, data_dir: str = "data"):
@@ -24,8 +23,6 @@ class GridStrategyEngine:
         self.api = ib_api
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
-
-        self.watchlist_file = os.path.join(self.data_dir, WATCHLIST_FILE) # Centralized path
 
         self.strategy_params: Dict[str, Strategy] = {}
         
@@ -47,7 +44,6 @@ class GridStrategyEngine:
         self.client = None
         LoggerManager.init(log_configs, clickhouse_config)
         self.start_time = datetime.datetime.now()
-        self.end_time = datetime.datetime.now()
 
 
     def _load_grid_strategies(self, params: List[Dict[Any, Any]]) -> bool:
@@ -61,20 +57,19 @@ class GridStrategyEngine:
             cost_per_grid = param.get("cost_per_grid", 500)
             spacing_ratio = param.get("spacing_ratio", 0.00)  # Default spacing ratio if not provided
             data_file = param.get('data_file', "")
-            do_optimize = param.get("do_optimize", False)
-            num_when_optimize = param.get('num_when_optimize', 1)
+            # do_optimize = param.get("do_optimize", False)
+            # num_when_optimize = param.get('num_when_optimize', 1)
             init_cash = param.get("init_cash", 10000)  # Default cash if not provided
             init_position = param.get("init_position", 0)  # Default position if not provided
-            send_email = param.get("send_email", False)  # Default max orders if not provided
+            # send_email = param.get("send_email", False)  # Default max orders if not provided
             
             strategy_id = f"GRID_{unique_tag}_{symbol}"
             grid = GridStrategy(self.api, strategy_id, symbol, 
                                 base_price, lower, upper, 
-                                cost_per_grid, proportion, 
+                                self.get_register_order_id_strategy_id,
+                                cost_per_grid=cost_per_grid,
+                                space_propor=proportion, 
                                 spacing_ratio=spacing_ratio,
-                                get_order_id=self.get_register_order_id_strategy_id,
-                                do_optimize=do_optimize, num_when_optimize=num_when_optimize,
-                                send_email=send_email,
                                 data_file=self.data_dir + "grid/" + data_file)
             self.strategy_params[strategy_id] = grid
 
@@ -201,31 +196,34 @@ class GridStrategyEngine:
         self._log(f"Strategy Engine Stop Running...", level=1)
         self.is_running = False
         
-        profits_summary = []
         today = datetime.datetime.now()
-        today_str = datetime.datetime.now().strftime("%Y%m%d")
+        profits_summary = []
+        values = []
+        for strategy_id, params in self.strategy_params.items() or {}:
+            summary = params.DailySummary(today.strftime("%Y%m%d"))
+            if summary:
+                profits_summary.append(summary)
+                value = [today, summary.strategy_name, summary.start_time, summary.end_time, summary.profits, json.dumps(summary.params)]
+                values.append(value)
+            self.strategy_result[strategy_id] = params.DoStop()
+            
         if today > self.start_time + datetime.timedelta(minutes=10):
-            for strategy_id, params in self.strategy_params.items() or {}:
-                summary = params.DailySummary(today_str)
-                if summary:
-                    profits_summary.append(summary)
-                    if not self.client:
-                        self.client = clickhouse_connect.get_client(
-                            host=config.clickhouse_host,
-                            port=config.clickhouse_port,
-                            username=config.clickhouse_user,
-                            password=config.clickhouse_password,
-                            database=config.clickhouse_database
-                        )
-                    values = [[today, strategy_id, summary.start_time, summary.end_time, summary.profits, json.dumps(summary.params)]]
-                    columns = ['date', 'strategy_id', 'start_time', 'end_time', 'profits', 'details']
-                    self.client.insert('profits', values, column_names=columns)
-                self.strategy_result[strategy_id] = params.DoStop()
+            if not self.client:
+                self.client = clickhouse_connect.get_client(
+                    host=config.clickhouse_host,
+                    port=config.clickhouse_port,
+                    username=config.clickhouse_user,
+                    password=config.clickhouse_password,
+                    database=config.clickhouse_database
+                )
+                
+            columns = ['date', 'strategy_id', 'start_time', 'end_time', 'profits', 'details']
+            self.client.insert('profits', values, column_names=columns)
 
             # 发送日报邮件
-            mail.send_email(f"[每日收益报告] {today_str}", common.generate_html(profits_summary))
+            mail.send_email(f"[每日收益报告] {today.strftime('%Y%m%d')}", common.generate_html(profits_summary))
         else:
-            mail.send_email(f"[出错了] {today_str}", "策略启动失败，需要人工处理。")
+            mail.send_email(f"[出错了] {today.strftime('%Y%m%d')}", "策略启动失败，需要人工处理。")
         
         self._log(f"All Strategies Stopped.", level=1)
         self._log(f"Strategy Engine Stop Running Done.", level=1)

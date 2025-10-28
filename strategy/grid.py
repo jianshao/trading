@@ -25,8 +25,6 @@ from apis.api import BaseAPI
 
 # --- Constants ---
 PENDING_ORDERS_FILE_TPL = "{strategy_id}_pending_cycles.json" # For persisting active grid cycles
-# 是否使用优化选项
-DO_OPTIMIZE = True
 
 
 @dataclass
@@ -81,13 +79,9 @@ class GridUnit:
 class GridStrategy(Strategy):
     def __init__(self, api: BaseAPI, strategy_id: str, symbol: str,
                  base_price: float, lowwer: float, upper: float, # 网格上下限
-                 cost_per_grid: float, space_propor: float = 0.01,
-                 spacing_ratio: float = 0, # 按比例增大网格价差，1.0为价差不变
-                 position_sizing_ratio: float = 0, # 按比例增加每网格成本，1.0为成本不变
-                 do_optimize: bool = False, num_when_optimize: int = 1,
-                 send_email: bool = False,  # 发送邮件通知
-                 get_order_id: Callable[[str], int] = None, data_file: str = "data/strategies/grid"): # For initial setup only
-        self.data_file = data_file
+                 get_order_id: Callable[[str], int],
+                 **kwargs): # For initial setup only
+        self.data_file = kwargs.get("data_file", "data/strategies/grid")
         
         self.api = api
         self.strategy_id = strategy_id
@@ -97,21 +91,18 @@ class GridStrategy(Strategy):
         self.base_price = base_price
         self.lower_bound = lowwer # 网格上下限默认使用过去一年的最低价和最高价
         self.upper_bound = upper
-        self.space_propor = space_propor
-        self.cost_per_grid = cost_per_grid  # 单网格成本
-        self.num_when_optimize = num_when_optimize  # 当开启优化选项时单次多买入或少卖出多少股
-        self.do_optimize = do_optimize  # 是否开启优化，开启优化后可以逐步建仓。
-        self.price_growth_ratio = spacing_ratio # 网格价差增长的比例，1.0为不增长
-        self.cost_growth_ratio = position_sizing_ratio # 每个网格股数增长比例，1为不变化
-        self.send_email = send_email  # 是否发送邮件通知
+        self.space_propor = kwargs.get("space_propor", 0.01)  # 网格价差比例
+        self.cost_per_grid = kwargs.get("cost_per_grid", 1000)  # 单网格成本
+        self.price_growth_ratio = kwargs.get("spacing_ratio", 0) # 网格价差增长的比例，1.0为不增长
+        self.cost_growth_ratio = kwargs.get("position_sizing_ratio", 0) # 每个网格股数增长比例，1为不变化
         self.primary_exchange = "NASDAQ"
         # 上层传入的获取本地关联order_id，并且关联到对应策略的方法
         self.get_order_id: Callable[[str], int] = get_order_id
         
         self.init_cash = 0
+        self.init_position = 0
         self.cash = 0
         self.position = 0
-        self.init_position = 0
         
         # --- NEW: Dynamic Grid Generation ---
         # --- State Management (mostly unchanged, but now uses dynamic shares) ---
@@ -134,7 +125,6 @@ class GridStrategy(Strategy):
         self.total_cost = 0
         
         self.profit_logs = []
-        self.start_time = None
         
         self.start_time = datetime.datetime.now()
         self.end_time = datetime.datetime.now()
@@ -341,9 +331,6 @@ class GridStrategy(Strategy):
     # 根据订单情况决定优化的股数，针对价值属性高的标的可以逐步建仓。
     def optimize(self, price, action):
         # 没有打开优化选项
-        if not self.do_optimize:
-            return 0
-        
         if action.upper() == "SELL":
             return 0
         
@@ -355,9 +342,6 @@ class GridStrategy(Strategy):
         # 根据当前价格与基础价格的偏移比例使用随机控制，如果触发优化则多或少1股（目前是1股）。
         # 选择的标的波动本身都比较小，直接使用偏移比例触发优化概率很低，扩大4倍
         prop = abs((price-self.base_price)/self.base_price)*100*4
-        if random.randint(1, 100) <= prop:
-            self.optimize_shares += self.num_when_optimize*100
-            return self.num_when_optimize
         return 0
     
     async def grid_buy(self, purpose: str, price: float, size: float) -> Optional[GridOrder]:
@@ -601,7 +585,7 @@ class GridStrategy(Strategy):
         asyncio.get_event_loop().run_until_complete(self._load_active_grid_cycles(current_market_price))
         
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"价格基线：{self.base_price}, 价格范围：[{self.lower_bound}, {self.upper_bound}], 单格投入：{self.cost_per_grid} 单格价差：{self.space_propor*100:.1f}%")
-        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash} 是否开启优化：{self.do_optimize} 优化股数：{self.num_when_optimize}")
+        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash}")
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Running.")
         self.is_running = True
         
