@@ -208,17 +208,20 @@ class GridStrategyEngine:
             self.strategy_result[strategy_id] = params.DoStop()
             
         if today > self.start_time + datetime.timedelta(minutes=10):
-            if not self.client:
-                self.client = clickhouse_connect.get_client(
-                    host=config.clickhouse_host,
-                    port=config.clickhouse_port,
-                    username=config.clickhouse_user,
-                    password=config.clickhouse_password,
-                    database=config.clickhouse_database
-                )
-                
-            columns = ['date', 'strategy_id', 'start_time', 'end_time', 'profits', 'details']
-            self.client.insert('profits', values, column_names=columns)
+            try:
+                if not self.client:
+                    self.client = clickhouse_connect.get_client(
+                        host=config.clickhouse_host,
+                        port=config.clickhouse_port,
+                        username=config.clickhouse_user,
+                        password=config.clickhouse_password,
+                        database=config.clickhouse_database
+                    )
+                    
+                columns = ['date', 'strategy_id', 'start_time', 'end_time', 'profits', 'details']
+                self.client.insert('profits', values, column_names=columns)
+            except Exception as e:
+                LoggerManager.Error("Clickhouse", event="Insert", content=f"Error inserting profits into ClickHouse: {e}")
 
             # 发送日报邮件
             mail.send_email(f"[每日收益报告] {today.strftime('%Y%m%d')}", common.generate_html(profits_summary))
