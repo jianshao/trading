@@ -13,6 +13,7 @@ import pandas as pd
 from strategy.common import DailyProfitSummary, OrderStatus, GridOrder
 from strategy.strategy import Strategy
 from utils import mail
+from utils.kafka_producer import KafkaProducerService
 from utils.logger_manager import LoggerManager
 
 if __name__ == '__main__': # Allow running/importing from different locations
@@ -130,6 +131,8 @@ class GridStrategy(Strategy):
         self.end_time = datetime.datetime.now()
         self.is_running = False
         self.lock = asyncio.Lock()
+        
+        self.producer: KafkaProducerService = kwargs.get("producer", None)  # To be set by StrategyEngine
         
         
 
@@ -362,6 +365,21 @@ class GridStrategy(Strategy):
             self.pending_buy_count += abs(size)
             self.pending_buy_cost = round(self.pending_buy_cost + cost, 2)
             LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="grid_buy", content=f"Place {purpose} BUY order, Price: {price:.2f}, Qty: {size} Id: {order.order_id}")
+            order_info = {
+                "strategy_id": self.strategy_id,
+                "event": "submit",
+                "order_id": f"{order.order_id}",
+                "oc": "OPEN",
+                "symbol": self.symbol,
+                "action": order.action,
+                "order_type": "LIMIT",
+                "price": order.lmt_price,
+                "apply_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "order_ref": f"ref-{self.strategy_id}",
+                "order_details": order.to_dict()
+            }
+            if self.producer:
+                await self.producer.send_message("order_logs", order_info)
         return order
       
     async def grid_sell(self, purpose: str, price: float, size: float) -> Optional[GridOrder]:
@@ -380,6 +398,21 @@ class GridStrategy(Strategy):
             self.pending_sell_count += abs(size)
             self.pending_sell_cost = round(self.pending_sell_cost + abs(price * size), 2)
             LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="grid_sell", content=f"Place {purpose} SELL order, Price: {price:.2f}, Qty: {size} Id: {sell_order.order_id}")
+            order_info = {
+                "strategy_id": self.strategy_id,
+                "event": "submit",
+                "order_id": f"{sell_order.order_id}",
+                "oc": "OPEN",
+                "symbol": self.symbol,
+                "action": sell_order.action,
+                "order_type": "LIMIT",
+                "price": sell_order.lmt_price,
+                "apply_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "order_ref": f"ref-{self.strategy_id}",
+                "order_details": sell_order.to_dict()
+            }
+            if self.producer:
+                await self.producer.send_message("order_logs", order_info)
         return sell_order
 
     
@@ -587,10 +620,12 @@ class GridStrategy(Strategy):
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"价格基线：{self.base_price}, 价格范围：[{self.lower_bound}, {self.upper_bound}], 单格投入：{self.cost_per_grid} 单格价差：{self.space_propor*100:.1f}%")
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash}")
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Running.")
-        self.is_running = True
         
+        self.is_running = True
         return 
 
+    def run(self):
+        self.is_running = True
 
     def _find_the_unit(self, price: float, isbuy: bool):
         price = round(price, 2)
@@ -740,7 +775,6 @@ class GridStrategy(Strategy):
             order = await self.grid_buy("OPEN", unit.price, unit.quantity)
         elif action.upper() == "SELL":
             order = await self.grid_sell("OPEN", unit.price, unit.quantity)
-        
         return order
     
     async def grid_close(self, unit: GridUnit, action: str) -> GridOrder:
@@ -752,7 +786,6 @@ class GridStrategy(Strategy):
             order = await self.grid_buy("CLOSE", unit.price, unit.quantity)
         elif action.upper() == "SELL":
             order = await self.grid_sell("CLOSE", unit.price, unit.quantity)
-            
         return order
     
     # 激活网格
@@ -873,11 +906,11 @@ class GridStrategy(Strategy):
         """初始激活网格单元"""
         down_level, up_level = self._get_valid_units_range(current_market_price)
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Initializing grid units in range: {down_level} - {up_level}")
-        buy_unit = sorted([u for u in self.grid_definitions.values() if u.price <= current_market_price], key=lambda x: x.price, reverse=True)[:5]
+        buy_unit = sorted([u for u in self.grid_definitions.values() if u.price <= current_market_price], key=lambda x: x.price, reverse=True)[:8]
         for unit in buy_unit:
             await self.grid_active(unit, True)
             
-        sell_unit = sorted([u for u in self.grid_definitions.values() if u.price > current_market_price], key=lambda x: x.price)[:5]
+        sell_unit = sorted([u for u in self.grid_definitions.values() if u.price > current_market_price], key=lambda x: x.price)[:8]
         for unit in sell_unit:
             await self.grid_active(unit, False)
 

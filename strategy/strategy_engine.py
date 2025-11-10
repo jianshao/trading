@@ -13,12 +13,13 @@ from strategy import common
 from strategy.strategy import Strategy
 from strategy.grid import GridStrategy
 from utils import mail
+from utils.kafka_producer import KafkaProducerService
 from utils.logger_manager import LoggerManager
 import data.config as config
 
 
 class GridStrategyEngine:
-    def __init__(self, ib_api: BaseAPI, data_dir: str = "data"):
+    def __init__(self, ib_api: BaseAPI, data_dir: str = "data", producer: Optional[KafkaProducerService] = None):
         self.strategy_name = "Grid Strategy"
         self.api = ib_api
         self.data_dir = data_dir
@@ -44,6 +45,8 @@ class GridStrategyEngine:
         self.client = None
         LoggerManager.init(log_configs, clickhouse_config)
         self.start_time = datetime.datetime.now()
+        
+        self.producer: Optional[KafkaProducerService] = producer
 
 
     def _load_grid_strategies(self, params: List[Dict[Any, Any]]) -> bool:
@@ -70,7 +73,7 @@ class GridStrategyEngine:
                                 cost_per_grid=cost_per_grid,
                                 space_propor=proportion, 
                                 spacing_ratio=spacing_ratio,
-                                data_file=self.data_dir + "grid/" + data_file)
+                                data_file=self.data_dir + "grid/" + data_file, producer=self.producer)
             self.strategy_params[strategy_id] = grid
 
             start_price = param.get("start_price")
@@ -125,7 +128,6 @@ class GridStrategyEngine:
             print("Error: IB API not connected. Abort init!")
             return False
         
-        self.is_running = True
         self.positions = self.api.get_current_positions()
         
         # 注册订单状态更新事件
@@ -133,7 +135,7 @@ class GridStrategyEngine:
         self.api.register_execution_fill_handler(self.handle_fill_async)
         self.api.register_disconnected_handler(self.handle_disconnect_event)
         self._log(f"Event Register Done.", level=1)
-
+        
         # 从文件中载入策略配置
         strategy_names = ["grid"]
         self._load_watchlist_and_calculate_params(strategy_names) # Sync
@@ -149,6 +151,7 @@ class GridStrategyEngine:
 
         self.start_time = datetime.datetime.now()
         
+        self.is_running = True
         self._log(f"Strategy Engine Initialize Completed.", level=1)
         return True
 
@@ -186,6 +189,13 @@ class GridStrategyEngine:
         # ... (Your existing handle_fill_async logic for detailed logging) ...
         pass
 
+    async def run(self):
+        self._log(f"Strategy Engine Run Loop Started.", level=1)
+        while self.api.isConnected() and self.is_running:
+            # 增加策略管理动作，如启动、停止策略等
+            await asyncio.sleep(1)
+        self._log(f"Strategy Engine Run Loop Exited.", level=1)
+        
     def DoStop(self):
         """
         停止策略执行:

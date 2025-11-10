@@ -36,7 +36,7 @@ class IBClientManager:
         print(f"account: {account}")
         self.client = client
         if client == "tws":
-            self.client_path = "/Users/eric/Applications/Trader Workstation/Trader Workstation.app/Contents/MacOS/JavaApplicationStub"
+            self.client_path = "/Users/eric/Applications/Trader Workstation 10.40/Trader Workstation 10.40.app/Contents/MacOS/JavaApplicationStub"
             self.port = 7496 if account == "real" else 7497
         else:
             self.client_path = "/Users/eric/Applications/IB Gateway 10.30/IB Gateway 10.30.app/Contents/MacOS/JavaApplicationStub"

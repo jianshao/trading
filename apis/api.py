@@ -137,3 +137,12 @@ class BaseAPI(ABC):
     @abstractmethod
     def register_disconnected_handler(self, handler: Callable[[], Coroutine[Any, Any, None]]):
         pass
+
+    @abstractmethod
+    def reqMktData(self, contract: Any, 
+                   genericTickList: str = "", 
+                   snapshot: bool = False, 
+                   regulatorySnapshot: bool = False, 
+                   mktDataOptions: Optional[List[Any]] = None) -> Any:
+        """Requests market data for a given contract."""
+        pass

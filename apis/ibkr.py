@@ -63,6 +63,42 @@ class IBapi(BaseAPI):
         self.ib.openOrderEvent += self._on_ib_open_order_snapshot_event # For snapshot of all open orders
         self.ib.disconnectedEvent += self._on_ib_disconnected_event # Handle disconnections
 
+    async def connectAsync(self) -> bool:
+        # async with self._connection_lock:
+        if self._is_connected and self.ib.isConnected():
+            print("IBapi: Already connected to IB.")
+            return True
+        try:
+            print(f"IBapi: Connecting to IB TWS/Gateway at {self.host}:{self.port} with ClientID {self.client_id}...")
+            # Ensure previous connection is fully closed if any existed
+            if self.ib.isConnected():
+                self.ib.disconnect()
+            
+            self.ib.RequestTimeout = 10 # Set a general request timeout for ib_insync requests
+            await self.ib.connectAsync(self.host, self.port, clientId=self.client_id, timeout=15) # Connection timeout
+            
+            if self.ib.isConnected():
+                self._is_connected = True
+                server_time = self.ib.reqCurrentTime() # Sync call, but good after connectAsync
+                print(f"IBapi: Successfully connected. Server Time: {server_time}")
+                # Request managed accounts to confirm (optional)
+                # managed_accounts = self.ib.managedAccounts()
+                # print(f"IBapi: Managed Accounts: {managed_accounts}")
+                return True
+            else:
+                print("IBapi: Connection failed (ib.isConnected() is False after connectAsync).")
+                self._is_connected = False
+                return False
+        except ConnectionRefusedError:
+            print(f"IBapi: Connection refused by IB TWS/Gateway at {self.host}:{self.port}.")
+        except asyncio.TimeoutError:
+            print("IBapi: Connection attempt to IB TWS/Gateway timed out.")
+        except Exception as e:
+            print(f"IBapi: An unexpected error occurred during connection: {e}")
+        
+        self._is_connected = False
+        return False
+
     def connect(self) -> bool:
         # async with self._connection_lock:
         if self._is_connected and self.ib.isConnected():
@@ -108,7 +144,8 @@ class IBapi(BaseAPI):
         # print("IBapi: Disconnected.")
 
     def isConnected(self) -> bool:
-        return self._is_connected and self.ib.isConnected()
+        # return self._is_connected and self.ib.isConnected()
+        return self.ib.isConnected()
 
     # --- Public API Methods for Strategy Engine ---
     def get_next_order_id(self) -> int:
@@ -580,3 +617,11 @@ class IBapi(BaseAPI):
 
         # 3. Calculate ATR from the fetched DataFrame
         return self.calculate_atr_from_df(historical_df, period=atr_period)
+    
+    def reqMktData(self, contract: Any, 
+                   genericTickList: str = "", 
+                   snapshot: bool = False, 
+                   regulatorySnapshot: bool = False, 
+                   mktDataOptions: Optional[List[Any]] = None) -> Any:
+        """Requests market data for a given contract."""
+        pass
