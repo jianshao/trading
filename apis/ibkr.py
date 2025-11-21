@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import asyncio
+import datetime
 import sys
 import os
 import numpy as np
@@ -10,6 +11,7 @@ from typing import Optional, Callable, Any, List, Dict, Coroutine
 from ib_insync import *
 import pandas as pd
 
+from data import config
 from strategy import common
 
 if __name__ == '__main__':
@@ -41,7 +43,7 @@ class IBapi(BaseAPI):
 
         # --- Callback Handlers (to be registered by the strategy engine or other consumers) ---
         # Signature: async def handler(trade: Trade, order_status: OrderStatus)
-        self.order_status_update_handler: Optional[Callable[[Trade, OrderStatus], Coroutine[Any, Any, None]]] = None
+        self.order_status_update_handler: Optional[Callable[[Trade], Coroutine[Any, Any, None]]] = None
         
         # Signature: async def handler(trade: Trade, fill: Fill)
         # Fill object in ib_insync contains both Execution and CommissionReport
@@ -75,7 +77,7 @@ class IBapi(BaseAPI):
                 self.ib.disconnect()
             
             self.ib.RequestTimeout = 10 # Set a general request timeout for ib_insync requests
-            await self.ib.connectAsync(self.host, self.port, clientId=self.client_id, timeout=15) # Connection timeout
+            self.ib = await self.ib.connectAsync(self.host, self.port, clientId=self.client_id) # Connection timeout
             
             if self.ib.isConnected():
                 self._is_connected = True
@@ -231,7 +233,7 @@ class IBapi(BaseAPI):
     async def place_limit_order(self, symbol: str, action: str, quantity: float, 
                                 limit_price: float, order_ref: str = "", tif: str = "GTC", 
                                 transmit: bool = True, outside_rth: bool = False,
-                                order_id_to_use: Optional[int] = None) -> Optional[any]:
+                                order_id_to_use: Optional[int] = None) -> Optional[common.GridOrder]:
         """Places a limit order and returns the ib_insync Trade object."""
         if not self.isConnected():
             print("IBapi: Cannot place order, not connected.")
@@ -263,6 +265,7 @@ class IBapi(BaseAPI):
         try:
             trade = self.ib.placeOrder(contract, order)
             if trade:
+                # print(f"IBapi: Order placed. OrderID: {trade.order.orderId}, Status: {trade.orderStatus.status if trade.orderStatus else 'Unknown'}, permId: {trade.order.permId}")
                 return common.convert_trade_to_gridorder(trade)
             else:
                 return None
@@ -315,7 +318,7 @@ class IBapi(BaseAPI):
         ib_order = common.convert_gridorder_to_ib_order(order_to_cancel)
         if ib_order and (ib_order.permId or ib_order.orderId != 0) : # Check if it's a valid order reference
             try:
-                # print(f"IBapi: Requesting cancellation for OrderID: {order_to_cancel.orderId} {order_to_cancel.lmtPrice} (PermID: {order_to_cancel.permId or 'N/A'})")
+                # print(f"IBapi: Requesting cancellation for OrderID: {ib_order.orderId} {ib_order.lmtPrice} (PermID: {ib_order.permId or 'N/A'})")
                 trade = self.ib.cancelOrder(ib_order) # cancelOrder returns a Trade object for the cancellation
                 # await asyncio.wait_for(trade.statusEvent, timeout=5) # Wait for cancel status
                 # print(f"IBapi: Cancellation request for order {order_to_cancel.orderId} status: {trade.orderStatus.status if trade.orderStatus else 'Unknown'}")
@@ -380,7 +383,7 @@ class IBapi(BaseAPI):
             return pd.DataFrame()
 
     # --- Callback Registration Methods ---
-    def register_order_status_update_handler(self, handler: Callable[[Trade, OrderStatus], Coroutine[Any, Any, None]]):
+    def register_order_status_update_handler(self, handler: Callable[[Trade], Coroutine[Any, Any, None]]):
         # print("IBapi: Order status update handler registered.")
         self.order_status_update_handler = handler
 
@@ -503,7 +506,7 @@ class IBapi(BaseAPI):
             return {}
 
         
-    def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[any]: # 修改 BaseAPI 时也应返回 List[Position] 或 List[GenericPosition]
+    async def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[any]: # 修改 BaseAPI 时也应返回 List[Position] 或 List[GenericPosition]
         """
         Fetches all current positions for the default account or a specified account.
         Returns a list of ib_insync.Position objects.
@@ -520,7 +523,7 @@ class IBapi(BaseAPI):
             #     self.ib.reqPositionsAsync(), # This requests a fresh batch of positions
             #     timeout=timeout_seconds
             # )
-            positions: List[Position] = self.ib.reqPositions()
+            positions: List[Position] = await self.ib.reqPositionsAsync()
             
             if account: # Filter by account if specified
                 positions = [p for p in positions if p.account == account]
@@ -625,3 +628,48 @@ class IBapi(BaseAPI):
                    mktDataOptions: Optional[List[Any]] = None) -> Any:
         """Requests market data for a given contract."""
         pass
+    
+    
+    async def get_latest_price(self, symbol: str, exchange="SMART", currency="USD"):
+        """
+        获取标的最新价格：
+        - 开盘：返回最新实时行情
+        - 未开盘：返回前一交易日收盘价
+        """
+
+        contract = Stock(symbol, exchange, currency)
+
+        # ---- 请求实时行情 ----
+        ticker = self.ib.reqMktData(contract, "", False, False)
+
+        # 等待数据就绪（最多 2 秒）
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if ticker.marketPrice() is not None:
+                break
+
+        price = ticker.marketPrice()
+
+        if price is not None and price > 0:
+            return price  # ✔ 市场开盘时使用实时行情
+
+        # ----------------------------------------------------
+        # 市场未开盘 → 获取前一交易日收盘价
+        # ----------------------------------------------------
+        now = datetime.datetime.now(config.time_zone)
+
+        bars = self.ib.reqHistoricalData(
+            contract,
+            endDateTime=now,
+            durationStr="2 D",
+            barSizeSetting="1 day",
+            whatToShow="TRADES",
+            useRTH=True
+        )
+
+        if not bars:
+            raise Exception("无法获取历史行情")
+
+        # 最后一根 K 线即前一交易日
+        last_bar = bars[-1]
+        return last_bar.close  # ✔ 前一交易日的收盘价

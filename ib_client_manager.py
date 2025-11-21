@@ -1,3 +1,4 @@
+import asyncio
 import os
 import subprocess
 import sys
@@ -46,20 +47,21 @@ class IBClientManager:
         self.proc = None
       
     # ----------------- 对外接口 -----------------
-    def start_and_connect(self) -> IB:
+    async def start_and_connect(self) -> IB:
         """启动客户端并建立连接"""
         # 启动IB客户端
         # 存在几种情况：1.客户端未启动，2.客户端已启动但未登录，3.客户端已启动且已登陆。
         # 首先尝试建立连接，如果连接成功直接返回实例
-        if self.ib.connect():
+        if await self.ib.connectAsync():
             return self.ib
+        return None
         
         # 如果不能建立连接，说明未登录，直接执行关闭客户端。
-        time.sleep(2)
+        await asyncio.sleep(2)
         self.disconnect_and_quit()
         
         # 重启客户端，触发自动登录
-        time.sleep(10)
+        await asyncio.sleep(10)
         env = os.environ.copy()
         self.proc = subprocess.Popen([self.client_path, "start"],
                                      env=env,
@@ -68,8 +70,8 @@ class IBClientManager:
         print(f"🚀 启动客户端 ...")
         
         # 等待10s，再次尝试连接，如果连接失败就退出；如果成功则返回实例
-        time.sleep(30)
-        if self.ib.connect():
+        await asyncio.sleep(30)
+        if await self.ib.connectAsync():
             print(f"✅ 已建立连接。")
             return self.ib
         return None

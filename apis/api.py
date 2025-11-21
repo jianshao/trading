@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from typing import Optional, Callable, Any, List, Dict, Coroutine, Union # Added Union
 import pandas as pd
 
+from strategy.common import GridOrder
+
 # --- Forward declarations for type hints if using concrete ib_insync types in ABC ---
 # These are not strictly necessary for ABC if using Any, but good for clarity if you
 # intend specific structures for callbacks even at the ABC level.
@@ -12,7 +14,7 @@ import pandas as pd
 
 # For ABC, let's try to use more generic type hints where possible,
 # or define simple data structures if needed by the ABC interface.
-
+OrderUpdateCallback = Callable[[GridOrder], Coroutine[Any, Any, None]]
 
 class BaseAPI(ABC):
     """
@@ -69,7 +71,7 @@ class BaseAPI(ABC):
     async def place_limit_order(self, symbol: str, action: str, quantity: float, 
                                 limit_price: float, order_ref: str = "", tif: str = "GTC", 
                                 transmit: bool = True, outside_rth: bool = False,
-                                order_id_to_use: Optional[int] = None) -> Optional[Any]:
+                                order_id_to_use: Optional[int] = None) -> Optional[GridOrder]:
         """Places a limit order and returns the ib_insync Trade object."""
         pass
 
@@ -106,7 +108,7 @@ class BaseAPI(ABC):
         pass
 
     @abstractmethod
-    def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[Any]:  # List of position details
+    async def get_current_positions(self, account: Optional[str] = None, timeout_seconds: int = 10) -> List[Any]:  # List of position details
         """Fetches current account positions."""
         pass
 
@@ -145,4 +147,8 @@ class BaseAPI(ABC):
                    regulatorySnapshot: bool = False, 
                    mktDataOptions: Optional[List[Any]] = None) -> Any:
         """Requests market data for a given contract."""
+        pass
+    
+    @abstractmethod
+    async def get_latest_price(self, symbol: str, exchange="SMART", currency="USD"):
         pass

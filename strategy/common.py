@@ -1,8 +1,11 @@
 import datetime
 from enum import Enum
 from typing import Optional
+from zoneinfo import ZoneInfo
 import backtrader as bt
 import ib_insync
+
+from data import config
     
 class OrderStatus(Enum):
     Created = 0,
@@ -15,20 +18,25 @@ class OrderStatus(Enum):
     Margin = 7
     Rejected = 8
     Cancelled = 9
+    ERROR = 10
 
 class GridOrder:
-    def __init__(self, symbol, order_id, action, price, shares, status: int):
+    def __init__(self, symbol, order_id, action, price, shares, status: int, perm_id: int = 0, order_ref: str = "", order_type: any = ""):
         self.symbol = symbol
         self.action = action
         self.order_id = order_id
+        self.order_type = "LIMIT"
         self.lmt_price = price
         self.shares = shares
         self.done_price = 0
         self.done_shares = 0
         self.fee = 0.35
         self.status: OrderStatus = OrderStatus(status)
-        self.apply_time = datetime.datetime.now()
+        self.apply_time = datetime.datetime.now(ZoneInfo(config.time_zone))
         self.done_time = None
+        self.perm_id = perm_id  # IB PermId, default to 0
+        self.order_ref = order_ref  # 可选的订单引用字段
+        self.order_type = order_type
     
     def __str__(self):
         return f"symbol:{self.symbol} action:{self.action} price:({round(self.lmt_price, 2)}, {round(self.done_price, 2)}) shares:({self.shares}, {self.done_shares}) status: {self.status}"
@@ -49,6 +57,9 @@ class GridOrder:
             "status": self.status.name,  # Store as string for readability
             "apply_time": self.apply_time.isoformat(),
             "done_time": self.done_time.isoformat() if self.done_time else "",
+            "perm_id": self.perm_id,
+            "order_ref": self.order_ref,
+            "order_type": self.order_type
         }
 
     @classmethod
@@ -59,7 +70,10 @@ class GridOrder:
             action=d["action"],
             price=d["lmt_price"],
             shares=d["shares"],
-            status=OrderStatus[d["status"]].value  # Convert back from name to int
+            status=OrderStatus[d["status"]].value,  # Convert back from name to int
+            perm_id=d.get("perm_id", 0),
+            order_ref=d.get("order_ref", ""),
+            order_type=d.get("order_type", "LIMIT")
         )
         obj.done_price = d["done_price"]
         obj.done_shares = d["done_shares"]
@@ -67,53 +81,7 @@ class GridOrder:
         obj.apply_time = datetime.datetime.fromisoformat(d["apply_time"])
         obj.done_time = datetime.datetime.fromisoformat(d["done_time"]) if d["done_time"] else None
         return obj
-        
 
-class LiveGridCycle: # Renamed from LiveGridTrade for clarity, represents one full cycle attempt
-    def __init__(self, strategy_id: str,
-                 open_order: GridOrder,
-                 close_order: Optional[GridOrder] = None):
-        self.strategy_id = strategy_id
-        
-        # 建仓订单信息
-        self.open_order = open_order
-        self.close_order = close_order
-        
-        # 当前订单所处的周期：
-        # OPENNING：已提交建仓单，等待成交中
-        # CLOSING：建仓已成交, 已提交平仓单，等待成交中
-        # DONE：平仓单已成交，周期结束
-        self.status = "OPENNING"
-    def to_dict(self):
-        return {
-            "strategy_id": self.strategy_id,
-            "open_order": self.open_order.to_dict(),
-            "close_order": self.close_order.to_dict() if self.close_order else None,
-            "status": self.status
-        }
-
-    @classmethod
-    def from_dict(cls, d):
-        open_order = GridOrder.from_dict(d["open_order"])
-        close_order = GridOrder.from_dict(d["close_order"]) if d["close_order"] else None
-        obj = cls(strategy_id=d["strategy_id"], open_order=open_order, close_order=close_order)
-        obj.status = d["status"]
-        return obj
-        
-    # 建仓单成交
-    def closing(self, open_order: GridOrder):
-        self.open_done_time = datetime.datetime.now()
-        self.close_apply_time = datetime.datetime.now()
-        self._open_order = open_order
-        self.open_fee = 1.05
-        self.status = "CLOSING"
-        
-    # 平仓单成交
-    def done(self, order: GridOrder):
-        self._close_order = order
-        self.close_done_time = datetime.datetime.now()
-        self.status = "DONE"
-        
 
 def convert_gridorder_to_ib_order(grid_order: GridOrder) -> ib_insync.Order:
     """
@@ -122,10 +90,12 @@ def convert_gridorder_to_ib_order(grid_order: GridOrder) -> ib_insync.Order:
     ib_order = ib_insync.Order()
     ib_order.orderId = grid_order.order_id
     ib_order.action = grid_order.action.upper()  # 'BUY' / 'SELL'
-    ib_order.orderType = 'LMT'
+    ib_order.orderType = grid_order.order_type  # 'LIMIT'
     ib_order.totalQuantity = abs(grid_order.shares)
     ib_order.lmtPrice = grid_order.lmt_price
     ib_order.tif = 'GTC'  # 默认使用 GTC（Good Till Canceled）
+    ib_order.permId = grid_order.perm_id  # permId 默认为 0，IB 会自动分配
+    ib_order.orderRef = grid_order.order_ref  # 可选的订单引用字段
 
     return ib_order
 
@@ -173,6 +143,9 @@ def convert_trade_to_gridorder(trade: ib_insync.Trade) -> GridOrder:
         price=price,
         shares=shares,
         status=grid_status.value,
+        perm_id=ib_order.permId,
+        order_ref=ib_order.orderRef,
+        order_type=ib_order.orderType
     )
     grid_order.done_price = done_price
     grid_order.done_shares = total_fill_size
@@ -181,10 +154,10 @@ def convert_trade_to_gridorder(trade: ib_insync.Trade) -> GridOrder:
     try:
         grid_order.apply_time = datetime.datetime.strptime(ib_order.manualOrderTime, "%Y%m%d  %H:%M:%S")
     except Exception:
-        grid_order.apply_time = datetime.datetime.now()
+        grid_order.apply_time = datetime.datetime.now(ZoneInfo(config.time_zone))
 
     if grid_status == OrderStatus.Completed:
-        grid_order.done_time = datetime.datetime.now()
+        grid_order.done_time = datetime.datetime.now(ZoneInfo(config.time_zone))
 
     return grid_order
 
@@ -192,10 +165,11 @@ class DailyProfitSummary:
     """
     每日盈利总结
     """
-    def __init__(self, strategy: str, strategy_name: str, profits: float, position: float, cash: float, date: str, params: dict = None, start_time: datetime.datetime = None, end_time: datetime.datetime = None):
+    def __init__(self, strategy: str, strategy_name: str, symbol: str, profits: float, position: float, cash: float, date: str, params: dict = None, start_time: datetime.datetime = None, end_time: datetime.datetime = None):
         self.date = datetime.datetime.now().strftime("%Y%m%d") if not date else date
         self.strategy = strategy
         self.strategy_name = strategy_name
+        self.symbol = symbol
         self.profits = profits
         self.position = position
         self.cash = cash

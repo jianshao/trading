@@ -4,6 +4,9 @@ import time
 from datetime import datetime
 from confluent_kafka import Producer
 
+from data import config
+from utils.logger_manager import LoggerManager
+
 
 class KafkaProducerService:
     def __init__(self,
@@ -22,7 +25,7 @@ class KafkaProducerService:
         self._producer = Producer({
             'bootstrap.servers': bootstrap_servers,
             'socket.keepalive.enable': True,
-            'connections.max.idle.ms': 1800000,
+            'connections.max.idle.ms': 0,
             'metadata.max.age.ms': 300000,
             'reconnect.backoff.max.ms': 10000,
             'message.timeout.ms': 30000,
@@ -44,7 +47,7 @@ class KafkaProducerService:
                 # 如果在 heartbeat_interval 内有消息，就发消息；否则发心跳
                 try:
                     msg = await asyncio.wait_for(self._queue.get(), timeout=self.heartbeat_interval)
-                    await self._send(msg.topic, msg.data)
+                    await self._send(msg['topic'], msg['data'])
                 except asyncio.TimeoutError:
                     await self._send_heartbeat()
 
@@ -74,7 +77,7 @@ class KafkaProducerService:
         """发送心跳消息"""
         heartbeat_msg = {
             "type": "heartbeat",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(config.time_zone).isoformat()
         }
         print(f"[KafkaProducer] Sending heartbeat at {heartbeat_msg['timestamp']}")
         await self._send(self.heartbeat_topic, heartbeat_msg)
@@ -104,7 +107,7 @@ async def main():
             "event": "trade_completed",
             "order_id": f"T{i+1}",
             "profit": round(10 + i * 0.5, 2),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(config.time_zone).isoformat()
         }
         await kafka_service.send_message(msg)
         await asyncio.sleep(10)

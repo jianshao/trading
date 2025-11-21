@@ -14,6 +14,8 @@ import time
 from clickhouse_driver import Client
 from zoneinfo import ZoneInfo
 
+from data import config
+
 
 class GZipTimedRotatingFileHandler(TimedRotatingFileHandler):
     """支持按天切割并压缩日志文件（.gz）"""
@@ -145,7 +147,7 @@ class LoggerManager:
 
         # enqueue for ClickHouse (异步批量写)
         if cls._ch_client:
-            timestamp = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = datetime.datetime.now(config.time_zone).strftime("%Y-%m-%d %H:%M:%S")
             item = (
                 timestamp,
                 logger_name,

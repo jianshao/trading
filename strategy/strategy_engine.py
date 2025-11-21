@@ -1,15 +1,17 @@
 
 import asyncio
-import datetime
+from datetime import datetime, timedelta
 import json
 import os
-import time
 from typing import Any, Callable, Dict, List, Optional
+# from zoneinfo import ZoneInfo
 
+import aiofiles
 import clickhouse_connect
 import pandas as pd
 from apis.api import BaseAPI
 from strategy import common
+from strategy.order_manager import OrderManager
 from strategy.strategy import Strategy
 from strategy.grid import GridStrategy
 from utils import mail
@@ -44,45 +46,45 @@ class GridStrategyEngine:
 
         self.client = None
         LoggerManager.init(log_configs, clickhouse_config)
-        self.start_time = datetime.datetime.now()
+        self.start_time = datetime.now(config.time_zone)
         
         self.producer: Optional[KafkaProducerService] = producer
+        self.om = OrderManager(self.api, producer)
 
 
-    def _load_grid_strategies(self, params: List[Dict[Any, Any]]) -> bool:
+    async def _load_grid_strategies(self, params: List[Dict[Any, Any]]) -> bool:
         for param in params:
-            symbol = param.get("symbol", "")
-            unique_tag = param.get("unique_tag", 1) 
-            base_price = param.get("base_price") 
-            lower = param.get("lower") 
-            upper = param.get("upper") 
-            proportion = param.get("proportion", 0.015)
-            cost_per_grid = param.get("cost_per_grid", 500)
-            spacing_ratio = param.get("spacing_ratio", 0.00)  # Default spacing ratio if not provided
-            data_file = param.get('data_file', "")
-            # do_optimize = param.get("do_optimize", False)
-            # num_when_optimize = param.get('num_when_optimize', 1)
-            init_cash = param.get("init_cash", 10000)  # Default cash if not provided
-            init_position = param.get("init_position", 0)  # Default position if not provided
-            # send_email = param.get("send_email", False)  # Default max orders if not provided
-            
-            strategy_id = f"GRID_{unique_tag}_{symbol}"
-            grid = GridStrategy(self.api, strategy_id, symbol, 
-                                base_price, lower, upper, 
-                                self.get_register_order_id_strategy_id,
-                                cost_per_grid=cost_per_grid,
-                                space_propor=proportion, 
-                                spacing_ratio=spacing_ratio,
-                                data_file=self.data_dir + "grid/" + data_file, producer=self.producer)
+            defaults = {
+                "symbol": "TQQQ",
+                "unique_tag": 1,
+                "limit_price_range": [80, 130],
+                "max_orders_in_single_direction": 8,
+                "cost_per_grid": 800,
+                "ratio_per_grid": 0.008,
+                "init_position": 52,
+                "init_cash": 11100
+            }
+
+            defaults.update(param)
+            defaults["data_file"] = f"{self.data_dir}grid/{defaults['symbol']}_{defaults['unique_tag']}.json"
+            strategy_id = f"GRID_{defaults['unique_tag']}_{defaults['symbol']}"
+
+            grid = GridStrategy(
+                self.om,
+                strategy_id,
+                self.get_register_order_id_strategy_id,
+                producer=self.producer,
+                **defaults,  # ✅ 把所有参数直接透传
+            )
             self.strategy_params[strategy_id] = grid
 
             start_price = param.get("start_price")
-            grid.InitStrategy(start_price, init_position, round(init_cash, 2))
+            await grid.InitStrategy(start_price, defaults["init_position"], round(defaults["init_cash"], 2))
         
         return True
     
     # --- Config and State Loading/Saving ---
-    def _load_watchlist_and_calculate_params(self, names):
+    async def _load_watchlist_and_calculate_params(self, names):
         strategy_config_map = {
             "grid": {
                 "func": self._load_grid_strategies,
@@ -94,7 +96,7 @@ class GridStrategyEngine:
             if strategy_config:
                 filename = strategy_config.get("filename", "")
                 if filename:
-                    self.read_json_file(self.data_dir + name + filename, strategy_config.get("func"))
+                    await self.read_json_file(self.data_dir + name + filename, strategy_config.get("func"))
                 else:
                     filepath = self.data_dir + name
                     self.read_json_files_from_directory(filepath, strategy_config.get("func"))
@@ -119,16 +121,16 @@ class GridStrategyEngine:
 
     def _log(self, content, level: int = 0):
         if level in [1]:
-            print(f'{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} {content}')
+            print(f'{datetime.now(config.time_zone).strftime("%Y-%m-%d %H:%M:%S")} {content}')
         
         
-    def InitStrategy(self): # Renamed and made async
+    async def InitStrategy(self): # Renamed and made async
         self._log(f"Strategy Engine Initialize starting", level=1)
         if not self.api.isConnected():
             print("Error: IB API not connected. Abort init!")
             return False
         
-        self.positions = self.api.get_current_positions()
+        # self.positions = await self.api.get_current_positions()
         
         # 注册订单状态更新事件
         self.api.register_order_status_update_handler(self.handle_order_update_async)
@@ -138,7 +140,7 @@ class GridStrategyEngine:
         
         # 从文件中载入策略配置
         strategy_names = ["grid"]
-        self._load_watchlist_and_calculate_params(strategy_names) # Sync
+        await self._load_watchlist_and_calculate_params(strategy_names) # Sync
 
         self._log(f"Load Strategy Configure Files Done.", level=1)
         # Initialize order ID counter
@@ -147,12 +149,9 @@ class GridStrategyEngine:
             self._log(f"Error: Could not get initial next valid order ID from IB API. Halting strategy init.", level=1)
             return False
         self.next_order_id_counter = initial_ib_order_id
-        self._log(f"Initialize Order Id Done: {self.next_order_id_counter}.", level=0)
+        self._log(f"Strategy Engine Initialize Completed. Initialize Order Id: {self.next_order_id_counter}.", level=0)
 
-        self.start_time = datetime.datetime.now()
-        
-        self.is_running = True
-        self._log(f"Strategy Engine Initialize Completed.", level=1)
+        self.start_time = datetime.now(config.time_zone)
         return True
 
     async def handle_disconnect_event(self):
@@ -190,13 +189,14 @@ class GridStrategyEngine:
         pass
 
     async def run(self):
+        self.is_running = True
         self._log(f"Strategy Engine Run Loop Started.", level=1)
         while self.api.isConnected() and self.is_running:
             # 增加策略管理动作，如启动、停止策略等
             await asyncio.sleep(1)
         self._log(f"Strategy Engine Run Loop Exited.", level=1)
         
-    def DoStop(self):
+    async def DoStop(self):
         """
         停止策略执行:
         1. 将未完成的订单 (active_grid_trades) 记录到文件中。
@@ -206,47 +206,45 @@ class GridStrategyEngine:
         self._log(f"Strategy Engine Stop Running...", level=1)
         self.is_running = False
         
-        today = datetime.datetime.now()
-        profits_summary = []
-        values = []
-        for strategy_id, params in self.strategy_params.items() or {}:
-            summary = params.DailySummary(today.strftime("%Y%m%d"))
-            if summary:
-                profits_summary.append(summary)
-                value = [today, summary.strategy_name, summary.start_time, summary.end_time, summary.profits, json.dumps(summary.params)]
-                values.append(value)
-            self.strategy_result[strategy_id] = params.DoStop()
+        try:
+            today = datetime.now(config.time_zone)
+            if today > self.start_time + timedelta(minutes=10):
+                profits_summary = []
+                for strategy_id, params in self.strategy_params.items() or {}:
+                    summary = params.DailySummary(today.strftime("%Y%m%d"))
+                    if summary:
+                        profits_summary.append(summary)
+                        if self.producer:
+                            data = {
+                                "strategy_id": strategy_id,
+                                "symbol": summary.symbol,
+                                "date": today.strftime("%Y-%m-%d"),
+                                "start_time": summary.start_time,
+                                "end_time": summary.end_time,
+                                "profits": summary.profits,
+                                "details": json.dumps(summary.params)
+                            }
+                            await self.producer.send_message("daily_profit_logs", data)
+                # 发送日报邮件
+                mail.send_email(f"[每日收益报告] {today.strftime('%Y%m%d')}", common.generate_html(profits_summary))
+            else:
+                mail.send_email(f"[出错了] {today.strftime('%Y%m%d')}", "策略启动失败，需要人工处理。")
             
-        if today > self.start_time + datetime.timedelta(minutes=10):
-            try:
-                if not self.client:
-                    self.client = clickhouse_connect.get_client(
-                        host=config.clickhouse_host,
-                        port=config.clickhouse_port,
-                        username=config.clickhouse_user,
-                        password=config.clickhouse_password,
-                        database=config.clickhouse_database
-                    )
-                    
-                columns = ['date', 'strategy_id', 'start_time', 'end_time', 'profits', 'details']
-                self.client.insert('profits', values, column_names=columns)
-            except Exception as e:
-                LoggerManager.Error("Clickhouse", event="Insert", content=f"Error inserting profits into ClickHouse: {e}")
-
-            # 发送日报邮件
-            mail.send_email(f"[每日收益报告] {today.strftime('%Y%m%d')}", common.generate_html(profits_summary))
-        else:
-            mail.send_email(f"[出错了] {today.strftime('%Y%m%d')}", "策略启动失败，需要人工处理。")
-        
+            for strategy_id, params in self.strategy_params.items() or {}:
+                self.strategy_result[strategy_id] = await params.DoStop()
+        except Exception as e:
+            LoggerManager.Error("app", event="stop", content=f"stop strategy engine error: {e}")
+            
         self._log(f"All Strategies Stopped.", level=1)
         self._log(f"Strategy Engine Stop Running Done.", level=1)
         return 
         
-    def read_json_file(self, filename: str, proc: Callable[[Dict[Any, Any]], bool]):
+    async def read_json_file(self, filename: str, proc: Callable[[Dict[Any, Any]], bool]):
         try:
-            with open(filename, 'r', encoding='utf-8') as file:
-                data = json.load(file)
-                if proc(data):
+            async with aiofiles.open(filename, 'r', encoding='utf-8') as file:
+                content = await file.read()
+                data = json.loads(content)
+                if await proc(data):
                     self._log(f"成功载入策略配置文件: {filename}", level=1)
                 
         except json.JSONDecodeError as e:
