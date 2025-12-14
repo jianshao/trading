@@ -128,7 +128,7 @@ def convert_trade_to_gridorder(trade: ib_insync.Trade) -> GridOrder:
         "Rejected": OrderStatus.Rejected,
         "PartiallyFilled": OrderStatus.Partial,
     }
-    grid_status = status_map.get(status.status, OrderStatus.Created)
+    grid_status = status_map.get(status.status, OrderStatus.ERROR)
 
     # 3. 成交价格和数量
     total_fill_size = sum(fill.execution.shares for fill in fills)

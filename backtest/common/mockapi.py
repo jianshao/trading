@@ -1,8 +1,9 @@
+from datetime import datetime
 import json
 import os
 import pickle
 import time
-from ib_insync import Order, OrderStatus, Trade
+from ib_insync import Order, OrderStatus, Stock, Trade
 from matplotlib import pyplot as plt
 import pandas as pd
 from backtest.common import common
@@ -68,6 +69,7 @@ class MockApi(BaseAPI):
                                 transmit: bool = True, outside_rth: bool = False,
                                 order_id_to_use: Optional[int] = None) -> Optional[Any]:
         """Places a limit order and returns the ib_insync Trade object."""
+        # print("place order....")
         if action.upper() == "BUY":
             order = self.bt_api.buy(price=limit_price, size=quantity, exectype=bt.Order.Limit)
         else:
@@ -131,28 +133,27 @@ class MockApi(BaseAPI):
             }
         ]
 
-    async def get_historical_data(self, contract: Any, end_date_time: str = "", 
+    async def get_historical_data(self, symbol: str, end_date_time: str = "", 
                                   duration_str: str = "1 M", bar_size_setting: str = "1 min", 
                                   what_to_show: str = 'TRADES', use_rth: bool = True, 
                                   format_date: int = 1, timeout_seconds: int = 60) -> Optional[pd.DataFrame]:
-        if isinstance(contract, str):
-            contract = await self.ib_api.get_contract_details(contract)
-        key = f"{contract.symbol}_{end_date_time}_{duration_str}_{bar_size_setting}"
+
+        key = f"{symbol}_{end_date_time}_{duration_str}_{bar_size_setting}"
         value = self.redis.get(key)
         if value:
             return pickle.loads(value)
-        data = await self.ib_api.get_historical_data(contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth, format_date)
-        if not data.empty:
+        data = await self.ib_api.get_historical_data(symbol, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth, format_date)
+        if len(data) > 0:
             # print("data set redis.")
             # print(f" {data[:4]}")
             self.redis.set(key, pickle.dumps(data))
         return data
 
-    async def get_atr(self, contract_spec: Any, # Can be an unqualified Contract object
+    async def get_atr(self, symbol: str, # Can be an unqualified Contract object
                       atr_period: int = 14, 
-                      hist_duration_str: str = "30 D", # Fetch enough data for ATR calc
+                      hist_duration: int = 30, # Fetch enough data for ATR calc
                       hist_bar_size: str = "1 day") -> Optional[float]:
-        return await self.ib_api.get_atr(contract_spec, atr_period, hist_duration_str, hist_bar_size)
+        return self.bt_api.atr[0]
 
     # --- Callback Registration Methods ---
     def register_order_status_update_handler(self, handler: Callable[[Any, Any], Coroutine[Any, Any, None]]):
@@ -169,3 +170,56 @@ class MockApi(BaseAPI):
 
     def register_disconnected_handler(self, handler: Callable[[], Coroutine[Any, Any, None]]):
         pass
+    
+    def reqMktData(self, contract: Any, 
+                   genericTickList: str = "", 
+                   snapshot: bool = False, 
+                   regulatorySnapshot: bool = False, 
+                   mktDataOptions: Optional[List[Any]] = None) -> Any:
+        """Requests market data for a given contract."""
+        pass
+    
+    async def get_latest_price(self, symbol: str, exchange="SMART", currency="USD"):
+        return self.bt_api.data.close[0]
+
+    async def get_ma(self, symbol: str, ma_period: int, bar_size: str = "1 day", duration: str = "60 D") -> float:
+        # 根据周期返回对应的 Backtrader 指标值
+        if ma_period == 20:
+            return self.bt_api.ema20[0]
+        elif ma_period == 12:
+            return self.bt_api.ema12[0]
+        elif ma_period == 26:
+            return self.bt_api.ema26[0]
+        else:
+            # 如果有其他周期，需要在这里扩展，或者用 dict 映射
+            return 0
+        
+    async def get_ema(self, symbol: str, ema_period: int, bar_size: str = "1 day", duration: str = "60 D") -> float:
+        # 根据周期返回对应的 Backtrader 指标值
+        if ema_period == 20:
+            return self.bt_api.ema20[0]
+        elif ema_period == 12:
+            return self.bt_api.ema12[0]
+        elif ema_period == 26:
+            return self.bt_api.ema26[0]
+        else:
+            # 如果有其他周期，需要在这里扩展，或者用 dict 映射
+            return 0
+    
+    def get_current_time(self) -> datetime:
+        """实盘返回系统当前时间"""
+        """回测返回当前 Bar 的时间"""
+        # self.bt.datetime.datetime(0) 返回的是 naive time (不带时区)
+        # 如果你的策略逻辑里用了带时区的计算，这里需要加上时区，否则会报错
+        # 假设 config.time_zone 是字符串 'US/Eastern'
+        
+        bt_time = self.bt_api.datetime.datetime(0)
+        
+        # 简单的处理方式：如果实盘代码用了 ZoneInfo，这里最好加上
+        # 如果实在麻烦，可以把实盘代码的时区去掉，保持 naive datetime
+        from zoneinfo import ZoneInfo
+        from data import config 
+        
+        if bt_time.tzinfo is None:
+             return bt_time.replace(tzinfo=ZoneInfo(config.time_zone))
+        return bt_time

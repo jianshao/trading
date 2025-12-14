@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import sys
 import os
+from zoneinfo import ZoneInfo
 import numpy as np
 from ib_insync.util import run
 from typing import Optional, Callable, Any, List, Dict, Coroutine
@@ -77,11 +78,11 @@ class IBapi(BaseAPI):
                 self.ib.disconnect()
             
             self.ib.RequestTimeout = 10 # Set a general request timeout for ib_insync requests
-            self.ib = await self.ib.connectAsync(self.host, self.port, clientId=self.client_id) # Connection timeout
+            await self.ib.connectAsync(self.host, self.port, clientId=self.client_id) # Connection timeout
             
             if self.ib.isConnected():
                 self._is_connected = True
-                server_time = self.ib.reqCurrentTime() # Sync call, but good after connectAsync
+                server_time = await self.ib.reqCurrentTimeAsync() # Sync call, but good after connectAsync
                 print(f"IBapi: Successfully connected. Server Time: {server_time}")
                 # Request managed accounts to confirm (optional)
                 # managed_accounts = self.ib.managedAccounts()
@@ -182,7 +183,7 @@ class IBapi(BaseAPI):
     async def _on_ib_order_status_event(self, trade: Trade):
         # print(f"IBapi _on_ib_order_status_event: OrderID={trade.order.orderId}, Status={trade.orderStatus.status}")
         if self.order_status_update_handler:
-            await self.order_status_update_handler(trade, trade.orderStatus)
+            await self.order_status_update_handler(trade)
 
     async def _on_ib_exec_details_event(self, trade: Trade, fill: Fill):
         # print(f"IBapi _on_ib_exec_details_event: OrderID={fill.execution.orderId}, ExecID={fill.execution.execId}, Shares={fill.execution.shares}")
@@ -208,11 +209,11 @@ class IBapi(BaseAPI):
         return 
 
     async def get_contract_details(self, symbol: str, exchange: str = "SMART", 
-                                 currency: str = "USD", primary_exchange: Optional[str] = None) -> Optional[Contract]:
+                                 currency: str = "USD", primary_exchange: Optional[str] = "NASDAQ") -> Optional[Contract]:
         """Creates and qualifies an IB Contract object for a stock."""
         if not self.isConnected(): return None
         
-        contract = Stock(symbol, exchange, currency)
+        contract = Stock(symbol, exchange, currency, primaryExchange=primary_exchange)
         if primary_exchange:
             contract.primaryExchange = primary_exchange
         
@@ -333,7 +334,7 @@ class IBapi(BaseAPI):
             print(f"IBapi: Invalid order object provided for cancellation (OrderID: {ib_order.orderId if ib_order else 'N/A'}).")
             return False
 
-    async def get_historical_data(self, contract: Contract, end_date_time: str = "", 
+    async def get_historical_data(self, symbol: str, end_date_time: str = "", 
                                   duration_str: str = "1 M", bar_size_setting: str = "1 min", 
                                   what_to_show: str = 'TRADES', use_rth: bool = True, 
                                   format_date: int = 1, timeout_seconds: int = 60) -> Optional[pd.DataFrame]:
@@ -344,6 +345,7 @@ class IBapi(BaseAPI):
             
             # Ensure contract is fully qualified if not already
             # if symbol:
+            contract = Stock(symbol=symbol, exchange = "SMART", currency = "USD")
             qualified_contract = await self.get_contract_details(contract.symbol)
             if not qualified_contract:
                 print(f"IBapi: Could not qualify contract {contract.symbol} for historical data.")
@@ -593,20 +595,22 @@ class IBapi(BaseAPI):
             # print("IBapi ATR Calc: True Range series is empty after dropna.")
         return None
 
-    async def get_atr(self, contract_spec: Any, # Can be an unqualified Contract object
+    async def get_atr(self, symbol: str, # Can be an unqualified Contract object
                       atr_period: int = 14, 
-                      hist_duration_str: str = "30 D", # Fetch enough data for ATR calc
+                      hist_duration: int = 30, # Fetch enough data for ATR calc
                       hist_bar_size: str = "1 day") -> Optional[float]:
         """
         Fetches historical daily data for the given contract and calculates its ATR.
         """
         if not self.isConnected(): return None
+        
+        contract = Stock(symbol=symbol, exchange = "SMART", currency = "USD")
 
-        days_to_fetch = max(atr_period * 2, 30) # Ensure enough data
+        days_to_fetch = max(atr_period * 2, hist_duration) # Ensure enough data
         adjusted_duration_str = f"{days_to_fetch} D"
 
         historical_df = await self.get_historical_data(
-            contract=contract_spec,
+            symbol=symbol,
             duration_str=adjusted_duration_str,
             bar_size_setting=hist_bar_size, # Daily bars for daily ATR
             what_to_show='TRADES',
@@ -615,7 +619,7 @@ class IBapi(BaseAPI):
         )
 
         if historical_df.empty or len(historical_df) < atr_period +1 : # Check if enough data returned
-            print(f"IBapi get_atr: Not enough historical data for {contract_spec.symbol} to calculate ATR({atr_period}). Got {len(historical_df)} bars.")
+            print(f"IBapi get_atr: Not enough historical data for {symbol} to calculate ATR({atr_period}). Got {len(historical_df)} bars.")
             return None
 
         # 3. Calculate ATR from the fetched DataFrame
@@ -632,44 +636,121 @@ class IBapi(BaseAPI):
     
     async def get_latest_price(self, symbol: str, exchange="SMART", currency="USD"):
         """
-        获取标的最新价格：
-        - 开盘：返回最新实时行情
-        - 未开盘：返回前一交易日收盘价
+        智能获取最新价格：
+        1. 尝试获取当前时刻的交易数据（含盘前盘后）。
+        2. 如果当前无交易（闭市），则回退获取最近一个交易日的收盘价。
+        此方法避开了 snapshot 权限问题，且不消耗快照额度。
         """
-
         contract = Stock(symbol, exchange, currency)
 
-        # ---- 请求实时行情 ----
-        ticker = self.ib.reqMktData(contract, "", False, False)
-
-        # 等待数据就绪（最多 2 秒）
-        for _ in range(20):
-            await asyncio.sleep(0.1)
-            if ticker.marketPrice() is not None:
-                break
-
-        price = ticker.marketPrice()
-
-        if price is not None and price > 0:
-            return price  # ✔ 市场开盘时使用实时行情
-
-        # ----------------------------------------------------
-        # 市场未开盘 → 获取前一交易日收盘价
-        # ----------------------------------------------------
-        now = datetime.datetime.now(config.time_zone)
-
-        bars = self.ib.reqHistoricalData(
+        # -----------------------------------------------------------
+        # 步骤 1: 尝试获取“实时”价格
+        # 逻辑：请求过去 60 秒的历史数据，开启 useRTH=False (允许盘前盘后)
+        # -----------------------------------------------------------
+        realtime_bars = await self.ib.reqHistoricalDataAsync(
             contract,
-            endDateTime=now,
-            durationStr="2 D",
-            barSizeSetting="1 day",
-            whatToShow="TRADES",
-            useRTH=True
+            endDateTime='',         # 空字符串代表“当前服务器时间”
+            durationStr='60 S',     # 只看过去 60 秒
+            barSizeSetting='1 min', # 1分钟 K 线
+            whatToShow='TRADES',    # 真实的成交价
+            useRTH=False,           # ✔️ 关键：包含盘前/盘后数据
+            formatDate=1,
+            keepUpToDate=False      # 我们只查一次，不需要流式更新
         )
 
-        if not bars:
-            raise Exception("无法获取历史行情")
+        if realtime_bars:
+            # 如果列表不为空，说明最近60秒内有成交（即市场是活跃的）
+            # bars[-1].close 就是这一分钟的收盘价，近似等于最新价
+            print(f"[{symbol}] 市场活跃，返回最新实时报价 (含盘前/后)")
+            return realtime_bars[-1].close
 
-        # 最后一根 K 线即前一交易日
-        last_bar = bars[-1]
-        return last_bar.close  # ✔ 前一交易日的收盘价
+        # -----------------------------------------------------------
+        # 步骤 2: 市场休市，获取前一交易日收盘价
+        # 逻辑：请求过去几天的日线数据，useRTH=True (只看正股时间)
+        # -----------------------------------------------------------
+        print(f"[{symbol}] 市场休市或无近期成交，获取前一交易日收盘价")
+        
+        daily_bars = await self.ib.reqHistoricalDataAsync(
+            contract,
+            endDateTime='',         # 截止到现在
+            durationStr='1 W',      # 向前找1周（为了跨过周末和长假）
+            barSizeSetting='1 day', # 日 K 线
+            whatToShow='TRADES',
+            useRTH=True,            # ✔️ 关键：只取正式交易时间的收盘价
+            formatDate=1
+        )
+
+        if not daily_bars:
+            # 极少见的情况：比如停牌很久的股票
+            raise Exception(f"无法获取标的 {symbol} 的任何历史行情")
+
+        # 返回最后一根日 K 线的收盘价
+        last_close = daily_bars[-1].close
+        return last_close
+
+    async def get_ma(self, symbol: str, ma_period: int, bar_size: str = "1 day", duration: str = "60 D") -> float:
+        """
+        获取指定 symbol 在指定周期(bar_size)上的 MA 均线。
+        """
+
+        # 构建合约
+        contract = Stock(symbol, "SMART", "USD")
+
+        # 解析合约
+        # await ib.qualifyContractsAsync(contract)
+
+        # 异步获取历史数据
+        bars = await self.ib.reqHistoricalDataAsync(
+            contract,
+            endDateTime="",
+            durationStr=duration,
+            barSizeSetting=bar_size,
+            whatToShow="TRADES",
+            useRTH=False,
+            formatDate=1
+        )
+
+        if not bars or len(bars) < ma_period:
+            raise ValueError(f"返回的历史数据不足以计算 MA{ma_period}")
+
+        # 转换为 DataFrame
+        df = util.df(bars)
+
+        # 计算均线
+        df[f"MA{ma_period}"] = df["close"].rolling(ma_period).mean()
+
+        # 返回最后一条
+        return float(df[f"MA{ma_period}"].iloc[-1])
+    
+    async def get_ema(self, symbol: str, ema_period: int, bar_size: str = "1 day", duration: str = "60 D") -> float:
+        """
+        获取指定 symbol 在指定周期(bar_size)上的 MA 均线。
+        """
+
+        # 构建合约
+        contract = Stock(symbol, "SMART", "USD")
+        # 异步获取历史数据
+        bars = await self.ib.reqHistoricalDataAsync(
+            contract,
+            endDateTime="",
+            durationStr=duration,
+            barSizeSetting=bar_size,
+            whatToShow="TRADES",
+            useRTH=True,
+            formatDate=1
+        )
+
+        if not bars or len(bars) < ema_period:
+            raise ValueError(f"返回的历史数据不足以计算 MA{ema_period}")
+
+        # 转换为 DataFrame
+        df = util.df(bars)
+        df['EMA20'] = df['close'].ewm(span=ema_period, adjust=False).mean()
+        
+        # 5. 取最新一条
+        return df['EMA20'].iloc[-1]
+    
+    def get_current_time(self) -> datetime:
+        """实盘返回系统当前时间"""
+        return datetime.datetime.now(ZoneInfo(config.time_zone))
+    

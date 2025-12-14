@@ -2,8 +2,11 @@
 import asyncio
 from datetime import datetime, timedelta
 import json
+import logging
 import os
+import traceback
 from typing import Any, Callable, Dict, List, Optional
+from zoneinfo import ZoneInfo
 # from zoneinfo import ZoneInfo
 
 import aiofiles
@@ -12,6 +15,7 @@ import pandas as pd
 from apis.api import BaseAPI
 from strategy import common
 from strategy.order_manager import OrderManager
+from strategy.real_time_data_processer import RealTimeDataProcessor
 from strategy.strategy import Strategy
 from strategy.grid import GridStrategy
 from utils import mail
@@ -37,32 +41,32 @@ class GridStrategyEngine:
         
         self.is_running = False
         self.next_order_id_counter: Optional[int] = None
+
+        self.start_time = datetime.now(ZoneInfo(config.time_zone))
+        
+        self.producer: Optional[KafkaProducerService] = producer
+        self.om = OrderManager(self.api, producer)
+        self.real_data_processor = RealTimeDataProcessor(self.api)
         
         log_configs = {
             "order": "logs/order.log",
             "app": "logs/app.log"
         }
-        clickhouse_config = {"host": "127.0.0.1", "database": "trading"}
-
-        self.client = None
-        LoggerManager.init(log_configs, clickhouse_config)
-        self.start_time = datetime.now(config.time_zone)
-        
-        self.producer: Optional[KafkaProducerService] = producer
-        self.om = OrderManager(self.api, producer)
+        LoggerManager.init(log_configs, level=logging.ERROR, realtime_data_processor=self.real_data_processor)
 
 
     async def _load_grid_strategies(self, params: List[Dict[Any, Any]]) -> bool:
         for param in params:
             defaults = {
-                "symbol": "TQQQ",
+                "symbol": "QQQ",
                 "unique_tag": 1,
-                "limit_price_range": [80, 130],
-                "max_orders_in_single_direction": 8,
-                "cost_per_grid": 800,
-                "ratio_per_grid": 0.008,
-                "init_position": 52,
-                "init_cash": 11100
+                "cycle_days": 14,
+                "count_of_atr_for_price_range": 5,
+                "atr_coefficient_of_grid_spread": 0.5,
+                "retention_fund_ratio": 0.2,
+                "skip_bear": True,
+                "total_cost": 13000,
+                "max_position_pct": 0.8
             }
 
             defaults.update(param)
@@ -72,14 +76,13 @@ class GridStrategyEngine:
             grid = GridStrategy(
                 self.om,
                 strategy_id,
-                self.get_register_order_id_strategy_id,
                 producer=self.producer,
+                real_data_processor=self.real_data_processor,
                 **defaults,  # ✅ 把所有参数直接透传
             )
             self.strategy_params[strategy_id] = grid
 
-            start_price = param.get("start_price")
-            await grid.InitStrategy(start_price, defaults["init_position"], round(defaults["init_cash"], 2))
+            await grid.InitStrategy(round(defaults["total_cost"], 2))
         
         return True
     
@@ -121,11 +124,12 @@ class GridStrategyEngine:
 
     def _log(self, content, level: int = 0):
         if level in [1]:
-            print(f'{datetime.now(config.time_zone).strftime("%Y-%m-%d %H:%M:%S")} {content}')
+            print(f'{datetime.now(ZoneInfo(config.time_zone)).strftime("%Y-%m-%d %H:%M:%S")} {content}')
         
         
     async def InitStrategy(self): # Renamed and made async
         self._log(f"Strategy Engine Initialize starting", level=1)
+        print(f"Strategy Engine Initialize starting")
         if not self.api.isConnected():
             print("Error: IB API not connected. Abort init!")
             return False
@@ -133,9 +137,9 @@ class GridStrategyEngine:
         # self.positions = await self.api.get_current_positions()
         
         # 注册订单状态更新事件
-        self.api.register_order_status_update_handler(self.handle_order_update_async)
-        self.api.register_execution_fill_handler(self.handle_fill_async)
-        self.api.register_disconnected_handler(self.handle_disconnect_event)
+        # self.api.register_order_status_update_handler(self.handle_order_update_async)
+        # self.api.register_execution_fill_handler(self.handle_fill_async)
+        # self.api.register_disconnected_handler(self.handle_disconnect_event)
         self._log(f"Event Register Done.", level=1)
         
         # 从文件中载入策略配置
@@ -151,26 +155,26 @@ class GridStrategyEngine:
         self.next_order_id_counter = initial_ib_order_id
         self._log(f"Strategy Engine Initialize Completed. Initialize Order Id: {self.next_order_id_counter}.", level=0)
 
-        self.start_time = datetime.now(config.time_zone)
+        self.start_time = datetime.now(ZoneInfo(config.time_zone))
         return True
 
     async def handle_disconnect_event(self):
-        self.is_running = False
+        self._log(f"IB Disconnected Event Triggered. Attempting Reconnect...", level=1)
+        # 清理状态
+        if self.api.isConnected():
+            self.api.disconnect()
+
         for i in range(5):
             try:
                 if self.api.isConnected():
-                    self.api.disconnect()
-                    
-                await asyncio.sleep(3)
-                
-                await self.api.connect()
-                if self.api.isConnected():
-                    self.is_running = True
                     return
+                await asyncio.sleep(3)
+                await self.api.connect()
                 
             except Exception as e:
                 self._log(f"重连第{i}次失败：{e}")
-
+        self.is_running = False
+            
     async def handle_order_update_async(self, trade: Any, order_status: Any):
         if not self.is_running: return
         order = common.convert_trade_to_gridorder(trade)
@@ -207,7 +211,7 @@ class GridStrategyEngine:
         self.is_running = False
         
         try:
-            today = datetime.now(config.time_zone)
+            today = datetime.now(ZoneInfo(config.time_zone))
             if today > self.start_time + timedelta(minutes=10):
                 profits_summary = []
                 for strategy_id, params in self.strategy_params.items() or {}:
@@ -254,6 +258,7 @@ class GridStrategyEngine:
         except Exception as e:
             error_msg = f"文件读取错误 - {filename}: {str(e)}"
             self._log(f"Error: {error_msg}", level=1)
+            traceback.print_exc()
         
     def read_json_files_from_directory(self, directory_path: str, proc: Callable[[Dict[Any, Any]], bool]):
         """

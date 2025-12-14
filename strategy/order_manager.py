@@ -1,10 +1,7 @@
-import asyncio
-import datetime
+
 from typing import Dict
 from venv import logger
-from zoneinfo import ZoneInfo
-from ib_insync import IB, Order, Contract, Stock, Trade, OrderState, Execution, MarketOrder, LimitOrder
-import logging
+from ib_insync import Trade, OrderState, Execution
 
 
 from apis.api import BaseAPI, OrderUpdateCallback
@@ -26,9 +23,10 @@ class OrderManager:
     内部订单管理器，现在是 IBWrapper 的一部分。
     它维护 ib_insync.Trade, GridOrder, 和 callback 之间的映射。
     """
-    def __init__(self, ib: BaseAPI, producer:KafkaProducerService=None):
+    def __init__(self, ib: BaseAPI, producer:KafkaProducerService=None, send_kafka: bool=True):
         self.ib = ib
         self.producer = producer
+        self.send_kafka = send_kafka
         # Key: ib_insync 的本地 orderId
         # Value: {'trade': Trade, 'grid_order': GridOrder, 'callback': Callable}
         self.active_orders: Dict[int, ActiveOrderRecord] = {}
@@ -59,6 +57,7 @@ class OrderManager:
     async def _dispatch_update(self, ib_trade: Trade):
         record = self.active_orders.get(ib_trade.order.orderId)
         if not record:
+            logger.error(f"unknow IB订单 {ib_trade.order.orderId} 。")
             return
 
         # --- 核心翻译逻辑 ---
@@ -72,7 +71,7 @@ class OrderManager:
         if grid_order.status in {OrderStatus.Completed, OrderStatus.Cancelled, OrderStatus.Rejected}:
             logger.info(f"IB订单 {grid_order.order_id} 已完成，从活动列表中移除。")
             self.active_orders.pop(ib_trade.order.orderId, None)
-            if self.producer:
+            if self.send_kafka and self.producer:
                 # 发送订单信息到 Kafka
                 order_info = {
                     "event": "deal" if grid_order.status == OrderStatus.Completed else "cancel",
@@ -119,7 +118,7 @@ class OrderManager:
             if order is None:
                 raise Exception("IB 返回了 None 订单。")
             
-            if self.producer:
+            if self.send_kafka and self.producer:
                 # 发送订单信息到 Kafka
                 order_info = {
                     "event": "order_placed",
@@ -147,16 +146,16 @@ class OrderManager:
     async def cancel_order(self, order_id: int) -> bool:
         # 实现取消逻辑...
         if order_id not in self.active_orders:
-            logger.warning(f"无法取消业务订单 {order_id}，因为没有有效的 api_order_id。")
+            # logger.warning(f"无法取消业务订单 {order_id}，因为没有有效的 api_order_id。")
             return False
 
         order = self.active_orders[order_id].grid_order
         ret = self.ib.cancel_order(order)
         if ret:
-            self.active_orders.pop(order_id, None)
+            # self.active_orders.pop(order_id, None)
             logger.info(f"业务订单 {order_id} 取消请求已发送。")
             
-            if self.producer:
+            if self.send_kafka and self.producer:
                 # 发送订单信息到 Kafka
                 order_info = {
                     "event": "cancel_sumbit",

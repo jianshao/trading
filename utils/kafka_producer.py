@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from confluent_kafka import Producer
 
 from data import config
@@ -77,9 +78,9 @@ class KafkaProducerService:
         """发送心跳消息"""
         heartbeat_msg = {
             "type": "heartbeat",
-            "timestamp": datetime.now(config.time_zone).isoformat()
+            "timestamp": datetime.now(ZoneInfo(config.time_zone)).isoformat()
         }
-        print(f"[KafkaProducer] Sending heartbeat at {heartbeat_msg['timestamp']}")
+        # print(f"[KafkaProducer] Sending heartbeat at {heartbeat_msg['timestamp']}")
         await self._send(self.heartbeat_topic, heartbeat_msg)
 
     async def send_message(self, topic: str, data: dict):
@@ -107,7 +108,7 @@ async def main():
             "event": "trade_completed",
             "order_id": f"T{i+1}",
             "profit": round(10 + i * 0.5, 2),
-            "timestamp": datetime.now(config.time_zone).isoformat()
+            "timestamp": datetime.now(ZoneInfo(config.time_zone)).isoformat()
         }
         await kafka_service.send_message(msg)
         await asyncio.sleep(10)

@@ -1,4 +1,5 @@
 # logger_manager.py
+import inspect
 import os
 import logging
 import structlog
@@ -15,6 +16,7 @@ from clickhouse_driver import Client
 from zoneinfo import ZoneInfo
 
 from data import config
+from strategy.real_time_data_processer import RealTimeDataProcessor
 
 
 class GZipTimedRotatingFileHandler(TimedRotatingFileHandler):
@@ -37,6 +39,39 @@ class GZipTimedRotatingFileHandler(TimedRotatingFileHandler):
                         # 压缩失败时，不抛出以免影响 rollover
                         pass
 
+# --- 【新增】自定义 Structlog 处理器 ---
+def add_dynamic_timestamp(_, __, event_dict):
+    """
+    自定义时间戳处理器：
+    优先从 LoggerManager.data_processor 获取回测时间。
+    如果获取失败或未初始化，回退到系统当前时间。
+    """
+    # 默认使用系统时间 (带时区)
+    current_dt = datetime.datetime.now(ZoneInfo(config.time_zone))
+
+    if LoggerManager.data_processor:
+        try:
+            # 尝试调用 get_current_time
+            # 注意：这里假设 get_current_time 是同步方法，或者返回的是 datetime 对象
+            t = LoggerManager.data_processor.get_current_time()
+            
+            # 【关键检查】如果 data_processor 是异步接口，t 会是一个协程对象
+            if inspect.iscoroutine(t):
+                # 日志是同步的，无法 await。必须销毁协程防止报警，并回退到系统时间
+                t.close() 
+                # 警告：建议修改 DataProcessor 增加同步获取时间的方法
+            elif isinstance(t, datetime.datetime):
+                # 如果返回的是 naive time (无时区)，补全时区
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=ZoneInfo(config.time_zone))
+                current_dt = t
+        except Exception:
+            # 获取时间出错时，忽略错误，使用系统时间，防止日志系统崩溃
+            pass
+
+    # structlog 标准格式：iso
+    event_dict["timestamp"] = current_dt.isoformat()
+    return event_dict
 
 class LoggerManager:
     """
@@ -56,8 +91,8 @@ class LoggerManager:
     _flush_interval = 3.0  # seconds
 
     @classmethod
-    def init(cls, log_configs, clickhouse_config=None,
-             batch_size: int = 50, flush_interval: float = 3.0, queue_maxsize: int = 10000):
+    def init(cls, log_configs, level: int=logging.INFO, clickhouse_config=None,
+             batch_size: int = 50, flush_interval: float = 3.0, queue_maxsize: int = 10000, realtime_data_processor: RealTimeDataProcessor = None):
         """
         初始化
         :param log_configs: dict, e.g. {"order": "logs/order.log", "error": "logs/error.log"}
@@ -73,6 +108,7 @@ class LoggerManager:
         cls._flush_interval = flush_interval
         cls._queue = queue.Queue(maxsize=queue_maxsize)
         cls._stop_event.clear()
+        cls.data_processor = realtime_data_processor
 
         # if clickhouse_config:
         #     cls._ch_client = Client(**clickhouse_config)
@@ -80,7 +116,8 @@ class LoggerManager:
         # structlog 基本配置：TimeStamper + JSONRenderer（文件端）
         structlog.configure(
             processors=[
-                structlog.processors.TimeStamper(fmt="iso", utc=True),
+                # structlog.processors.TimeStamper(fmt="iso", utc=True),
+                add_dynamic_timestamp,
                 structlog.processors.JSONRenderer(sort_keys=False, ensure_ascii=False),
             ],
             context_class=dict,
@@ -97,7 +134,7 @@ class LoggerManager:
             )
             handler.setFormatter(logging.Formatter('%(message)s'))
             std_logger = logging.getLogger(name)
-            std_logger.setLevel(logging.INFO)
+            std_logger.setLevel(level)
             # 避免重复添加 handler（多次 init 的情况）
             if not any(getattr(h, "baseFilename", None) == getattr(handler, "baseFilename", None)
                        for h in std_logger.handlers):
@@ -147,7 +184,7 @@ class LoggerManager:
 
         # enqueue for ClickHouse (异步批量写)
         if cls._ch_client:
-            timestamp = datetime.datetime.now(config.time_zone).strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = cls.data_processor.get_current_time().strftime("%Y-%m-%d %H:%M:%S")
             item = (
                 timestamp,
                 logger_name,

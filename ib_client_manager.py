@@ -52,7 +52,7 @@ class IBClientManager:
         # 启动IB客户端
         # 存在几种情况：1.客户端未启动，2.客户端已启动但未登录，3.客户端已启动且已登陆。
         # 首先尝试建立连接，如果连接成功直接返回实例
-        if await self.ib.connectAsync():
+        if await self.ib.connect():
             return self.ib
         return None
         

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+from datetime import datetime, timedelta
 import signal
 from ib_insync import IB, Stock, Ticker
 import logging
@@ -11,9 +12,10 @@ from ib_client_manager import IBClientManager
 from strategy.strategy_engine import GridStrategyEngine
 from utils import utils
 from utils.kafka_producer import KafkaProducerService
+from utils.logger_manager import LoggerManager
 
 # 配置日志
-logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -21,50 +23,51 @@ logger = logging.getLogger(__name__)
 
 # 启动 Kafka 生产者的协程，需要单独的协程周期性发送消息保持kafka连接不中断
 async def kafka_producer_run(producer: KafkaProducerService):
-    logger.info("kafka任务已启动...")
+    LoggerManager.Info("app", "init", content=f"kafka producer start...")
     try:
         await producer.start()
     except Exception as e:
-        logger.error(f"Kafka 生产者任务发生异常: {e}")
+        LoggerManager.Error("app", "error", f"Kafka 生产者任务发生异常: {e}")
     except asyncio.CancelledError:
-        logger.info("Kafka 生产者任务被取消，正在执行最后的清理工作...")
+        LoggerManager.Info("app", event="stop", content=f"Kafka 生产者任务被取消，正在执行最后的清理工作...")
     finally:
         await producer.stop()
-        logger.info("Kafka 生产者任务已退出。")
+        LoggerManager.Info("app", "stop", content=f"Kafka 生产者任务已退出。")
 
 # 策略管理任务
 async def strategy_engine(ib: BaseAPI, producer: KafkaProducerService = None):
     """一个模拟的策略逻辑，它会定期运行直到被取消。"""
-    logger.info("策略引擎任务已启动...")
+    LoggerManager.Info("app", "init", content=f"策略引擎任务已启动...")
     engine = GridStrategyEngine(ib, "data/real/strategies/", producer=producer)
     try:
         if not await engine.InitStrategy():
-            logger.error("初始化策略引擎失败，退出策略任务。")
+            LoggerManager.Error("app", "error", content=f"初始化策略引擎失败，退出策略任务。")
             return
         await engine.run()
+        LoggerManager.Info("app", "stop", content=f"策略引擎任务已退出")
     except Exception as e:
-        logger.error(f"策略任务发生异常: {e}")
+        LoggerManager.Error("app", "error", content=f"策略任务发生异常: {e}")
     except asyncio.CancelledError:
         # 这是优雅退出的关键：捕获 CancelledError 并执行清理
-        logger.info("策略任务被取消，正在执行最后的清理工作...")
+        LoggerManager.Info("app", "stop", content=f"策略任务被取消，正在执行最后的清理工作...")
     finally:
         await engine.DoStop()
-        logger.info("策略任务已退出。")
+        LoggerManager.Info("app", "stop", content=f"策略任务已退出。")
 
 
 # 实时数据处理任务，包括ticker数据保存和技术指标计算
 async def real_data_processing(ib: IB, producer: KafkaProducerService = None):
     """一个模拟的实时数据处理任务，同样支持取消。"""
-    logger.info("实时数据处理任务已启动...")
+    LoggerManager.Info("app", "init", content=f"实时数据处理任务已启动...")
     while True:
         try:
-            logger.info("实时数据处理任务正在运行...")
+            # LoggerManager.Info("app", "init", content=f"实时数据处理任务正在运行...")
             await asyncio.sleep(15)
         except asyncio.CancelledError:
-            logger.info("实时数据处理任务被取消，正在退出。")
+            LoggerManager.Info("app", "stop", content=f"实时数据处理任务被取消，正在退出。")
             break
         except Exception as e:
-            logger.error(f"实时数据处理任务发生错误: {e}")
+            LoggerManager.Error("app", "error", content=f"实时数据处理任务发生错误: {e}")
             await asyncio.sleep(15)
 
 
@@ -73,7 +76,7 @@ async def shutdown(sig: signal.Signals, ib: IB, tasks: set):
     """
     一个更完整的关闭协程，现在它也负责断开 IB 连接。
     """
-    logger.info(f"接收到退出信号({sig.name}), 正在取消 {len(tasks)} 个后台任务...")
+    LoggerManager.Info("app", "stop", content=f"接收到退出信号({sig.name}), 正在取消 {len(tasks)} 个后台任务...")
     
     # 1. 取消所有后台任务
     # 如果没有任务，就没必要取消
@@ -84,15 +87,14 @@ async def shutdown(sig: signal.Signals, ib: IB, tasks: set):
         task.cancel()
     
     # 2. 等待所有任务完成清理
-    logger.info("等待所有任务完成清理...")
     await asyncio.gather(*tasks, return_exceptions=True)
     
     # 3. 在所有任务结束后，断开 IB 连接
     # 这是关键修改：将断开连接的操作移到这里，确保它在任务清理后、循环停止前执行
     if ib and ib.isConnected():
-        logger.info("所有任务已清理完毕，正在断开 IB 连接...")
+        LoggerManager.Info("app", "stop", content=f"所有任务已清理完毕，正在断开 IB 连接...")
         ib.disconnect()
-        logger.info("已断开 IB 连接。")
+        LoggerManager.Info("app", "stop", content=f"已断开 IB 连接。")
     
     # 4. 停止事件循环
     # 我们不再直接停止循环，而是让 run_until_complete 来管理
@@ -102,22 +104,25 @@ async def shutdown(sig: signal.Signals, ib: IB, tasks: set):
   
 # --- 4. 主异步函数 (Async Main) ---
 
+is_running: bool = False
 async def main():
+
+    log_configs = {
+        "order": "logs/order.log",
+        "app": "logs/app.log"
+    }
+    LoggerManager.init(log_configs)
+    
     api = IBapi('127.0.0.1', 7496, 12)
     loop = asyncio.get_running_loop()
     background_tasks = set()
-    
-    # 创建一个 Future，当它被设置结果时，主循环就可以结束
-    shutdown_signal = loop.create_future()
 
     # ---------------- 关键：修改信号处理器 ----------------
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(
             sig,
             # 现在信号处理器只负责调用 shutdown 协程，并将 shutdown_signal 设置为完成
-            lambda s=sig: asyncio.create_task(
-                shutdown_and_set_future(s, api, background_tasks, shutdown_signal)
-            )
+            lambda s=sig: shutdown_and_set_future(s)
         )
     # ----------------------------------------------------
 
@@ -130,26 +135,22 @@ async def main():
     
     # 如果不是交易日直接退出
     if args.check and not utils.is_us_stock_open():
-        print("today is not trading day. exiting...")
+        LoggerManager.Info("app", "init", content=f"today is not trading day. exiting...")
         exit(0)
-
-    # print(args.client)
-    # print(args.account)
-    manager = IBClientManager(args.client, args.account)
     
     try:
-        logger.info("正在连接到 IB Gateway/TWS...")
+        LoggerManager.Info("app", "init", content=f"正在连接到 IB Gateway/TWS...")
         
         if not await api.connectAsync():
-            logger.error("系统错误: 连接到 IBKR 失败，正在中止.....")
+            LoggerManager.Error("app", "error", content=f"系统错误: 连接到 IBKR 失败，正在中止.....")
             return
-        logger.info("连接成功！")
+        LoggerManager.Info("app", "init", content=f"连接成功！")
 
         # contract = Stock('NVDA', 'SMART', 'USD')
         # await ib.qualifyContractsAsync(contract)
         # ib.reqMktData(contract, '', False, False)
 
-        logger.info("启动后台业务任务...")
+        LoggerManager.Info("app", "init", content=f"启动后台业务任务...")
         producer = KafkaProducerService(
             bootstrap_servers=config.kafka_brokers,
             heartbeat_topic="system_heartbeat",
@@ -164,25 +165,37 @@ async def main():
         data_task = loop.create_task(real_data_processing(api))
         background_tasks.add(data_task)
 
-        logger.info("系统已启动并运行中。按 Ctrl+C 退出。")
-        # 主协程现在等待 shutdown_signal 这个 Future
-        await shutdown_signal
+        global is_running
+        is_running = True
+        
+        LoggerManager.Info("app", "init", content=f"系统已启动并运行中。按 Ctrl+C 退出。")
+        
+        now = datetime.now()
+        # 构造"明天早上7点30分"的 datetime 对象
+        next_day_5am = datetime.combine(now.date() + timedelta(days=1), datetime.min.time()) + timedelta(hours=7, minutes=20)
+        # 计算时间差
+        delta = (next_day_5am - now).seconds
+        while api.isConnected() and delta and is_running:
+            await asyncio.sleep(2)
+            delta -= 2
+        
+        await shutdown(sig, api, background_tasks)
 
     except Exception as e:
-        logger.error(f"主程序发生严重错误: {e}")
+        LoggerManager.Error("app", "error", content=f"主程序发生严重错误: {e}")
     finally:
         # 主要的断开逻辑已经移到了 shutdown 协程中。
         # 这里的 finally 块现在只是一个最后的保障。
         if api and api.isConnected():
-            logger.warning("在主 finally 块中执行了断开操作，这通常不应该发生。")
+            LoggerManager.Info("app", "error", content=f"在主 finally 块中执行了断开操作，这通常不应该发生。")
             api.disconnect()
-        logger.info("主协程 main() 即将退出。")
+        LoggerManager.Info("app", "stop", content=f"主协程 main() 即将退出。")
 
-async def shutdown_and_set_future(sig, ib, tasks, future):
+def shutdown_and_set_future(sig):
     """辅助函数，调用 shutdown 并设置 Future 的结果。"""
-    await shutdown(sig, ib, tasks)
-    if not future.done():
-        future.set_result(True)
+    LoggerManager.Info("app", "stop", content="收到退出信号，执行退出...")
+    global is_running
+    is_running = False
 
 
 # --- 5. 程序的唯一入口 ---
@@ -192,6 +205,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("程序被强制退出。")
+        LoggerManager.Info("app", "stop", content=f"程序被强制退出。")
     finally:
-        logger.info("程序已关闭。")
+        LoggerManager.Info("app", "stop", content=f"程序已关闭。")

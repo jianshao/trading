@@ -1,156 +1,213 @@
-#!/usr/bin/python3#!/usr/bin/python3
-import socket
-import subprocess
-import datetime
-import sys
-import os
-import signal
-import time
-from typing import Dict
-from datetime import timedelta
 import argparse
-import holidays
+import asyncio
+from datetime import datetime, timedelta
+import signal
+from ib_insync import IB, Stock, Ticker
+import logging
 
-from ib_client_manager import IBClientManager
-from utils import utils
-
-if __name__ == '__main__': # Only adjust path if running as script directly
-    # This assumes backtester_main.py is in a subdirectory (e.g., 'scripts')
-    # and 'apis' and 'strategy' are in the parent directory of that subdirectory.
-    # Adjust as per your actual project structure.
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(current_dir, '..'))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
-
+from apis.api import BaseAPI
 from apis.ibkr import IBapi
-from strategy.strategy import Strategy
+from data import config
+from ib_client_manager import IBClientManager
 from strategy.strategy_engine import GridStrategyEngine
+from utils import utils
+from utils.kafka_producer import KafkaProducerService
+from utils.logger_manager import LoggerManager
 
-STRATEGY_GRID = "grid"
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-is_running: bool = False
 
-# 初始所有化策略环境，必须等待初始化完成才能继续
-# 初始化时只能使用同步接口，否则会出现报错：This event loop is already running
-def InitStrategies(api: IBapi, real: bool) -> GridStrategyEngine:
-    # grid 策略
-    if not real:
-        filename = "data/paper/strategies/"
-    else:
-        filename = "data/real/strategies/"
-    engine = GridStrategyEngine(api, filename)
-    if engine.InitStrategy():
-        return engine
+# --- 1. 业务逻辑 async 函数 (与之前相同，但增加了更精细的异常处理) ---
+
+# 启动 Kafka 生产者的协程，需要单独的协程周期性发送消息保持kafka连接不中断
+async def kafka_producer_run(producer: KafkaProducerService):
+    LoggerManager.Info("app", "init", content=f"kafka producer start...")
+    try:
+        await producer.start()
+    except Exception as e:
+        LoggerManager.Error("app", "error", f"Kafka 生产者任务发生异常: {e}")
+    except asyncio.CancelledError:
+        LoggerManager.Info("app", event="stop", content=f"Kafka 生产者任务被取消，正在执行最后的清理工作...")
+    finally:
+        await producer.stop()
+        LoggerManager.Info("app", "stop", content=f"Kafka 生产者任务已退出。")
+
+# 策略管理任务
+async def strategy_engine(ib: BaseAPI, producer: KafkaProducerService = None):
+    """一个模拟的策略逻辑，它会定期运行直到被取消。"""
+    LoggerManager.Info("app", "init", content=f"策略引擎任务已启动...")
+    engine = GridStrategyEngine(ib, "data/real/strategies/", producer=producer)
+    try:
+        if not await engine.InitStrategy():
+            LoggerManager.Error("app", "error", content=f"初始化策略引擎失败，退出策略任务。")
+            return
+        await engine.run()
+        LoggerManager.Info("app", "stop", content=f"策略引擎任务已退出")
+    except Exception as e:
+        LoggerManager.Error("app", "error", content=f"策略任务发生异常: {e}")
+    except asyncio.CancelledError:
+        # 这是优雅退出的关键：捕获 CancelledError 并执行清理
+        LoggerManager.Info("app", "stop", content=f"策略任务被取消，正在执行最后的清理工作...")
+    finally:
+        # disconnect触发的退出
+        request_shutdown(signal.SIGTERM, None)
+        await engine.DoStop()
+        LoggerManager.Info("app", "stop", content=f"策略任务已退出。")
+
+
+# 实时数据处理任务，包括ticker数据保存和技术指标计算
+async def real_data_processing(ib: IB, producer: KafkaProducerService = None):
+    """一个模拟的实时数据处理任务，同样支持取消。"""
+    LoggerManager.Info("app", "init", content=f"实时数据处理任务已启动...")
+    while True:
+        try:
+            # LoggerManager.Info("app", "init", content=f"实时数据处理任务正在运行...")
+            await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            LoggerManager.Info("app", "stop", content=f"实时数据处理任务被取消，正在退出。")
+            break
+        except Exception as e:
+            LoggerManager.Error("app", "error", content=f"实时数据处理任务发生错误: {e}")
+            await asyncio.sleep(15)
+
+
+# --- 3. 优雅退出处理机制 ---
+async def shutdown(sig: signal.Signals, ib: IB, tasks: set):
+    """
+    一个更完整的关闭协程，现在它也负责断开 IB 连接。
+    """
+    LoggerManager.Info("app", "stop", content=f"接收到退出信号({sig.name}), 正在取消 {len(tasks)} 个后台任务...")
     
-    return None
+    # 1. 取消所有后台任务
+    # 如果没有任务，就没必要取消
+    if not tasks:
+        return
 
-
-def StopStrategies(engine: GridStrategyEngine):
-    print("Stop all Strategies: ")
-    engine.DoStop()
+    for task in tasks:
+        task.cancel()
     
-    print("All Strategies Exited!")
-
-def handle_strategies(api: IBapi, args):
-    engine = InitStrategies(api, args.account == 'real')
-    if not engine:
-        print("Initializing Strategies Failed, Aborting...")
-    else:
-        # 使用纯同步方式，否则会有以下问题
-        # 1.使用asyncio.run(xxx)：IB内部已经使用asyncio管理异步事件了，如果入口再使用会导致2个管理混乱出错
-        # 2.直接使用ib.run()：ib.run()会阻塞线程成为常驻主线程，但是ib内部可能在执行某些事件，导致监听IBKR通知事件得不到处理
-        global is_running
-        is_running = True
-        
-        now = datetime.datetime.now()
-        # 构造"明天早上7点30分"的 datetime 对象
-        next_day_5am = datetime.datetime.combine(now.date() + timedelta(days=1), datetime.datetime.min.time()) + timedelta(hours=7, minutes=30)
-
-        # 计算时间差
-        delta = (next_day_5am - now).seconds
-        # print(f"remaining seconds: {delta}")
-        while api.isConnected() and is_running and delta:
-            api.ib.sleep(1)
-            delta -= 1
-            # 发送心跳，通知其他部分
-        
-        # 退出所有策略
-        StopStrategies(engine)
+    # 2. 等待所有任务完成清理
+    await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # 3. 在所有任务结束后，断开 IB 连接
+    # 这是关键修改：将断开连接的操作移到这里，确保它在任务清理后、循环停止前执行
+    if ib and ib.isConnected():
+        LoggerManager.Info("app", "stop", content=f"所有任务已清理完毕，正在断开 IB 连接...")
+        ib.disconnect()
+        LoggerManager.Info("app", "stop", content=f"已断开 IB 连接。")
 
 
-def HandleExit(signum, frame):
-    print("收到退出信号，准备退出")
-    global is_running
-    is_running = False
+# --- 全局 ---
+_SHUTDOWN_REQUESTED = False
 
-def cancel_all_orders(api: IBapi):
-    print("Cancel All Orders Now...")
-    for o in api.ib.reqAllOpenOrders():
-        print(f"Cancelling Order: {o.order.orderId}, {o.contract.symbol}, {getattr(o.order, 'lmtPrice', 'MKT')}, {o.orderStatus.status}")
-        api.ib.cancelOrder(o.order)
-    print("All Orders Canceled.")
-
-def cancel_order_by_symbol_price(api: IBapi, symbol: str, price: float):
-    matched = 0
-    orders = api.ib.reqAllOpenOrders()
-    for o in orders:
-        # 匹配标的和价格
-        if o.contract.symbol.upper() == symbol and getattr(o.order, 'lmtPrice', None) == price:
-            api.ib.cancelOrder(o.order)
-            matched += 1
-    print(f"已发送取消请求，匹配订单 {matched} 个")
-
-def handle_cancel_orders(api: IBapi, args):
-    if args.cancel[0].lower() == "all":
-        cancel_all_orders(api)
-    elif len(args.cancel) == 2:
-        symbol = args.cancel[0].upper()
-        price = float(args.cancel[1])
-        cancel_order_by_symbol_price(api, symbol, price)
+def request_shutdown(sig, frame):
+    """同步信号处理器，只设置一个标志。"""
+    global _SHUTDOWN_REQUESTED
+    if not _SHUTDOWN_REQUESTED:
+        print(f"\n收到退出信号 {sig}，将在当前循环结束后关闭...")
+        _SHUTDOWN_REQUESTED = True
 
 
-if __name__ == "__main__":
+async def main():
+
+    log_configs = {
+        "order": "logs/order.log",
+        "app": "logs/app.log"
+    }
+    LoggerManager.init(log_configs)
+    
+    api = IBapi('127.0.0.1', 7496, 12)
+    loop = asyncio.get_running_loop()
+    background_tasks = set()
+
+    # ---------------- 关键：修改信号处理器 ----------------
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+    # ----------------------------------------------------
+
     parser = argparse.ArgumentParser(description='命令行参数')
     parser.add_argument('account', type=str, choices=["real", "paper"], help='启动账户类型, real-真实账户、 paper-模拟账户')
     parser.add_argument('--cancel', nargs='+', help='取消订单，all-取消所有订单')
     parser.add_argument('client', type=str, help='指定启动的客户端, tws-TWS, ib-IB GATEWAY')
     parser.add_argument('--check', action='store_true', help='检查今天是不是交易日')
     args = parser.parse_args()
-    # 注册信号退出事件
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, HandleExit)
-        
     
     # 如果不是交易日直接退出
     if args.check and not utils.is_us_stock_open():
-        print("today is not trading day. exiting...")
+        LoggerManager.Info("app", "init", content=f"today is not trading day. exiting...")
         exit(0)
-
-    # print(args.client)
-    # print(args.account)
-    manager = IBClientManager(args.client, args.account)
-    print(f"************************** Auto Trading System Starting **************************")
+    
     try:
-        # 组装、连接api，使api与策略解耦
-        api = manager.start_and_connect()
-        if not api:
-            print("System Error: Connect to IBKR FAIL, Aborting.....")
-        else:
-            if args.cancel:
-                handle_cancel_orders(api, args)
-            elif args.account:
-                handle_strategies(api, args)
+        LoggerManager.Info("app", "init", content=f"正在连接到 IB Gateway/TWS...")
+        
+        if not await api.connectAsync():
+            LoggerManager.Error("app", "error", content=f"系统错误: 连接到 IBKR 失败，正在中止.....")
+            return
+        LoggerManager.Info("app", "init", content=f"连接成功！")
+
+        # contract = Stock('NVDA', 'SMART', 'USD')
+        # await ib.qualifyContractsAsync(contract)
+        # ib.reqMktData(contract, '', False, False)
+
+        LoggerManager.Info("app", "init", content=f"启动后台业务任务...")
+        producer = KafkaProducerService(
+            bootstrap_servers=config.kafka_brokers,
+            heartbeat_topic="system_heartbeat",
+            heartbeat_interval=120  # 每2分钟心跳
+        )
+        producer_task = loop.create_task(kafka_producer_run(producer))
+        background_tasks.add(producer_task)
+        
+        strategy_task = loop.create_task(strategy_engine(api, producer=producer))
+        background_tasks.add(strategy_task)
+        
+        data_task = loop.create_task(real_data_processing(api))
+        background_tasks.add(data_task)
+
+        LoggerManager.Info("app", "init", content=f"系统已启动并运行中。按 Ctrl+C 退出。")
+        
+        now = datetime.now()
+        # 构造"明天早上7点30分"的 datetime 对象
+        next_day_5am = datetime.combine(now.date() + timedelta(days=1), datetime.min.time()) + timedelta(hours=7, minutes=20)
+        # 计算时间差
+        delta = (next_day_5am - now).seconds
+        # delta = 120
+        while True: # 主循环现在只负责检查退出条件
+            if _SHUTDOWN_REQUESTED:
+                print("检测到关闭请求 (来自信号)...")
+                break
+            if delta <= 0:
+                print("到达预设关闭时间...")
+                break
+            if not api.isConnected():
+                print("IB 连接已断开...")
+                break
+            
+            delta -= 1
+            await asyncio.sleep(1) # 主循环的心跳
+
 
     except Exception as e:
-        print(f"Trading System Error: {e}")
-        import traceback
-        traceback.print_exc()
+        LoggerManager.Error("app", "error", content=f"主程序发生严重错误: {e}")
     finally:
-        # 关闭连接
-        manager.disconnect_and_quit()
-        time.sleep(5)
-        print(f"************************** Auto Trading System Exited! **************************")
+        # 循环退出后，执行关闭逻辑
+        await shutdown(signal.SIGTERM, api, background_tasks)
+        
+        # 最终的保障性断开连接（如果 shutdown 失败）
+        if api and api.isConnected():
+            api.disconnect()
+        LoggerManager.Info("app", "stop", content=f"主协程 main() 已退出。")
 
-    
 
+# --- 5. 程序的唯一入口 ---
+if __name__ == "__main__":
+    # 现在我们可以安全地使用 asyncio.run()，因为它会等待 main() 协程完成后再关闭循环。
+    # 而 main() 协程会等待我们手动触发的 shutdown_signal。
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        LoggerManager.Info("app", "stop", content=f"程序被强制退出。")
+    finally:
+        LoggerManager.Info("app", "stop", content=f"程序已关闭。")

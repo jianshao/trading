@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Optional, Callable, Any, List, Dict, Coroutine, Union # Added Union
 import pandas as pd
 
@@ -113,9 +114,9 @@ class BaseAPI(ABC):
         pass
 
     @abstractmethod
-    async def get_atr(self, contract_spec: Any, # Can be an unqualified Contract object
+    async def get_atr(self, symbol: str, # Can be an unqualified Contract object
                       atr_period: int = 14, 
-                      hist_duration_str: str = "30 D", # Fetch enough data for ATR calc
+                      hist_duration: int = 30, # Fetch enough data for ATR calc
                       hist_bar_size: str = "1 day") -> Optional[float]:
         pass
 
@@ -150,5 +151,24 @@ class BaseAPI(ABC):
         pass
     
     @abstractmethod
+    async def get_historical_data(self, symbol: str, end_date_time: str = "", 
+                                  duration_str: str = "1 M", bar_size_setting: str = "1 min", 
+                                  what_to_show: str = 'TRADES', use_rth: bool = True, 
+                                  format_date: int = 1, timeout_seconds: int = 60) -> Optional[pd.DataFrame]:
+        pass
+    
+    @abstractmethod
     async def get_latest_price(self, symbol: str, exchange="SMART", currency="USD"):
+        pass
+
+    @abstractmethod
+    async def get_ma(self, symbol: str, ema_period: int, bar_size: str = "1 day", duration: str = "60 D") -> float:
+        pass
+
+    @abstractmethod
+    async def get_ema(self, symbol: str, ema_period: int, bar_size: str = "1 day", duration: str = "60 D") -> float:
+        pass
+    
+    @abstractmethod
+    def get_current_time(self) -> datetime:
         pass
