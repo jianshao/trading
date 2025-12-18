@@ -3,7 +3,7 @@ import json
 import os
 import pickle
 import time
-from ib_insync import Order, OrderStatus, Stock, Trade
+from ib_insync import Order, Stock, Trade
 from matplotlib import pyplot as plt
 import pandas as pd
 from backtest.common import common
@@ -14,7 +14,9 @@ import backtrader as bt
 
 from apis.ibkr import IBapi
 from apis.api import BaseAPI
+from strategy.common import OrderStatus
 from strategy.grid import GridOrder
+from utils.logger_manager import LoggerManager
 
 class MockApi(BaseAPI):
     def __init__(self, bt_api: bt.Strategy = None, ib_api: IBapi = None, symbol: str = ""):
@@ -63,6 +65,56 @@ class MockApi(BaseAPI):
     def _on_ib_disconnected_event(self):
         return 
     
+    def map_bt_status(self, bt_status):
+        if bt_status == bt.Order.Submitted:
+            return OrderStatus.Submitted
+        elif bt_status == bt.Order.Accepted:
+            return OrderStatus.Accepted
+        elif bt_status == bt.Order.Completed:
+            return OrderStatus.Completed
+        elif bt_status == bt.Order.Canceled:
+            return OrderStatus.Canceled
+        elif bt_status == bt.Order.Expired:
+            return OrderStatus.Expired
+        elif bt_status == bt.Order.Rejected:
+            return OrderStatus.Rejected
+        elif bt_status == bt.Order.Margin:
+            # Backtrader 的 Margin (保证金不足) 通常归类为 Rejected 或 Error
+            return OrderStatus.Rejected 
+        return OrderStatus.ERROR
+
+    def bt_order_to_grid_order(self, order: bt.Order) -> GridOrder:
+        """
+        将 Backtrader 的 Order 对象转换为自定义的 GridOrder 对象
+        """
+        # 1. 获取原本的自定义 ID
+        
+        # 2. 确定买卖方向 (BT中 size>0 为买, size<0 为卖)
+        action = "BUY" if order.isbuy() else "SELL"
+        
+        # 3. 获取价格和数量
+        # created 是挂单时的请求，executed 是实际执行的结果
+        lmt_price = order.created.price
+        # 注意：BT的sell size是负数，我们需要转为绝对值
+        shares = abs(order.created.size) 
+        
+        done_price = order.executed.price if order.executed.price else 0.0
+        done_shares = abs(order.executed.size)
+        
+        # 4. 映射状态
+        status = self.map_bt_status(order.status)
+
+        # 5. 组装 GridOrder
+        grid_order = GridOrder(
+            order_id=order.ref,     # 使用我们追踪的字符串 ID
+            symbol="TQQQ", # 获取合约名称
+            action=action,
+            price=lmt_price,
+            shares=shares,
+            status=status,
+        )
+        
+        return grid_order
 
     async def place_limit_order(self, contract: Any, action: str, quantity: float, 
                                 limit_price: float, order_ref: str = "", tif: str = "GTC", 
@@ -75,8 +127,12 @@ class MockApi(BaseAPI):
         else:
             order = self.bt_api.sell(price=limit_price, size=quantity, exectype=bt.Order.Limit)
         # 将order转换成GridOrder
-        self.pending_orders[order.ref] = order
-        return common.buildGridOrder(order)
+        new_order = None
+        if order:
+            LoggerManager.Debug("app", strategy="mockapi", event=f"place_order", content=f"place order {order.ref} {type(order.ref)}")
+            self.pending_orders[order.ref] = order
+            new_order = self.bt_order_to_grid_order(order)
+        return new_order
         
 
     def cancel_order(
@@ -85,14 +141,18 @@ class MockApi(BaseAPI):
     ) -> bool:
         """Cancels an existing order."""
         # print(f" MockApi: cancel limit order {order_to_cancel.orderId} {order_to_cancel.action} {order_to_cancel.totalQuantity} @{order_to_cancel.lmtPrice}.")
+        LoggerManager.Debug("app", strategt="mockapi", event="cancel", content=f"cancel order: {order_to_cancel.order_id}")
         if not order_to_cancel:
             print(" Cancel Order Failed: invalid param.")
+            LoggerManager.Error("app", strategt="mockapi", event="cancel_failed", content=f"cancel order: {order_to_cancel.order_id} invalid params")
             return False
         if order_to_cancel.order_id not in self.pending_orders:
+            LoggerManager.Error("app", strategt="mockapi", event="cancel_failed", content=f"cancel order: {order_to_cancel.order_id} not exist")
             return True
         
         order = self.pending_orders[order_to_cancel.order_id]
         if order:
+            LoggerManager.Debug("app", strategt="mockapi", event="cancel_ok", content=f"cancel order: {order_to_cancel.order_id}")
             self.bt_api.cancel(order)
             del self.pending_orders[order_to_cancel.order_id]
         

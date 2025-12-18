@@ -345,13 +345,19 @@ class IBapi(BaseAPI):
             
             # Ensure contract is fully qualified if not already
             # if symbol:
-            contract = Stock(symbol=symbol, exchange = "SMART", currency = "USD")
-            qualified_contract = await self.get_contract_details(contract.symbol)
-            if not qualified_contract:
-                print(f"IBapi: Could not qualify contract {contract.symbol} for historical data.")
-                return None
-            contract_to_use = qualified_contract
+            # contract = Stock(symbol=symbol, exchange = "SMART", currency = "USD")
+            # if symbol == "VXN":
+            #     contract = Index("VXN", "CBOE")
+            # qualified_contract = await self.get_contract_details(contract.symbol)
+            # if not qualified_contract:
+            #     print(f"IBapi: Could not qualify contract {contract.symbol} for historical data.")
+            #     return None
+            # contract_to_use = qualified_contract
 
+            if symbol == "VXN":
+                contract_to_use = Index("VXN", "CBOE")
+            else:
+                contract_to_use = Stock(symbol=symbol, exchange = "SMART", currency = "USD")
             bars: BarDataList = await self.ib.reqHistoricalDataAsync(
                     contract_to_use,
                     endDateTime=end_date_time,

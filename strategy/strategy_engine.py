@@ -82,7 +82,7 @@ class GridStrategyEngine:
             )
             self.strategy_params[strategy_id] = grid
 
-            await grid.InitStrategy(round(defaults["total_cost"], 2))
+            await grid.InitStrategy()
         
         return True
     

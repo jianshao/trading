@@ -8,6 +8,7 @@ from apis.api import BaseAPI, OrderUpdateCallback
 from strategy import common
 from strategy.common import GridOrder, OrderStatus
 from utils.kafka_producer import KafkaProducerService
+from utils.logger_manager import LoggerManager
 
 # ... (假设 logger 已经配置好) ...
 
@@ -114,7 +115,7 @@ class OrderManager:
         try:
             # --- 翻译：从 GridOrder 到 ib_insync.Contract 和 ib_insync.Order ---
 
-            order = await self.ib.place_limit_order(symbol, action, quantity, price, **kwargs)
+            order = await self.ib.place_limit_order(symbol, action, quantity, price)
             if order is None:
                 raise Exception("IB 返回了 None 订单。")
             
@@ -135,18 +136,21 @@ class OrderManager:
                 await self.producer.send_message(ORDER_TOPIC, order_info)
             # --- 存储映射关系 ---
             self.active_orders[order.order_id] = ActiveOrderRecord(order, callback)
-            logger.info(f"业务订单 {order.order_id} 已提交到 IB, 分配的 api_order_id 为 {order.order_id}")
+            LoggerManager.Debug("app", strategy="om", event=f"place_order", content=f"业务订单 {order.order_id} 已提交, order_id 为 {order.order_id}")
+            # logger.info(f"业务订单 {order.order_id} 已提交到 IB, 分配的 api_order_id 为 {order.order_id}")
             return order
         except Exception as e:
-            logger.error(f"IBWrapper: 提交订单 {order.order_id} 失败 - {e}")
-            order.status = OrderStatus.Rejected
+            logger.error(f"IBWrapper: 提交订单 失败 - {e}")
+            # order.status = OrderStatus.Rejected
             # await callback(order) # 通知策略提交失败
             return None
       
-    async def cancel_order(self, order_id: int) -> bool:
+    async def cancel_order(self, order_id: any) -> bool:
         # 实现取消逻辑...
+        LoggerManager.Debug("app", strategy=f"om.cancel", event=f"om.cancel", content=f"业务订单 {order_id} 请求取消")
         if order_id not in self.active_orders:
             # logger.warning(f"无法取消业务订单 {order_id}，因为没有有效的 api_order_id。")
+            LoggerManager.Error("app", strategy=f"om.cancel", event=f"om.cancel_unknown", content=f"业务订单 {order_id} 取消请求失败。")
             return False
 
         order = self.active_orders[order_id].grid_order
@@ -171,5 +175,5 @@ class OrderManager:
                 }
                 await self.producer.send_message(ORDER_TOPIC, order_info)
             return True
-        logger.info(f"业务订单 {order_id} 取消请求失败。")
+        LoggerManager.Error("app", strategy=f"om.cancel", event=f"om.cancel", content=f"业务订单 {order_id} 取消请求失败。")
         return ret

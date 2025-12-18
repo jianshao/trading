@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import asyncio
+from ctypes import util
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import json
@@ -92,7 +93,7 @@ class GridStrategy(Strategy):
         
         self.init_cash = 0
         self.init_position = 0
-        self.cash = 0
+        self.cash = self.total_cost
         self.position = 0
         
         # --- NEW: Dynamic Grid Generation ---
@@ -100,8 +101,8 @@ class GridStrategy(Strategy):
         # 运行时数据
         self.close_units: Dict[Any, GridUnit] = {}
         self.open_orders: Dict[Any, GridOrder] = {}
-        self.clear_order_id = 0
-        self.all_clear_order_id = 0
+        self.clear_order = None
+        self.all_clear_order = None
         self.base_position_order: Optional[GridOrder] = None
         
         # 统计数据
@@ -282,7 +283,7 @@ class GridStrategy(Strategy):
         # 每双周做一次配置更新，包括网格价格上下限、单个成本
         runtime = data.get("runtimes", {})
         current_time = self.realtime_data_processor.get_current_time()
-        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="reflesh_config", content=f"Curr_time: {current_time}, runtime: {runtime}")
+        LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="reflesh_config", content=f"Curr_time: {current_time}, runtime: {runtime}")
         if runtime:
             self.total_cost = runtime.get('total_cost', 0)
             self.grid_spread = runtime.get('grid_spread', 1.0)
@@ -293,8 +294,8 @@ class GridStrategy(Strategy):
             
             if current_time - self.last_rebalance < timedelta(days=CYCLE_DAYS_DEFAULT):
                 # 恢复未完成的订单
+                LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_skip", content=f"No rebalance needed. Last rebalance at {self.last_rebalance}, current time {current_time}.")
                 await self._recover_orders_from_file(data)
-                LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="rebalance_skip", content=f"No rebalance needed. Last rebalance at {self.last_rebalance}, current time {current_time}.")
                 return data
         
         # --- 开始执行新周期重置 ---
@@ -357,50 +358,103 @@ class GridStrategy(Strategy):
     # 每双周重新均衡，生成新的价格上下限和中线
     async def rebalance(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """每双周重新均衡，生成新的价格上下限和中线"""
+        # if not await self.is_grid_friendly_day():
+        #     # 当日行情不适合运行
+        #     LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"skip", content=f"not good for running today.")
+        #     return data.get("runtimes", {})
+        
         # 周期性刷新配置
         last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
         runtimes = await self.reflesh_config(data, last_price)
         
-        # 趋势过滤：如果不跳过熊市检查，则继续建仓
-        if self.strategy_when_bear == "nothing":
-            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_no_bear_check", content=f"Not skipping base position build in bear market.")
-            return runtimes
+        # # # 趋势过滤：如果不跳过熊市检查，则继续建仓
+        # if self.strategy_when_bear == "nothing":
+        #     LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="rebalance_no_bear_check", content=f"Not skipping base position build in bear market.")
+        #     return runtimes
 
-        # A. 趋势过滤：如果是熊市，坚决不建仓
-        if self.strategy_when_bear == "stop":
-            if await self.is_bear_market():
-                await self.set_stop_buy(last_price)
-            else:
-                # 之前是熊市，没有清仓，此时也不需要重新建仓，清除设置即可。
-                await self.clear_stop_buy()
-        elif self.strategy_when_bear == "clear":
-            if await self.is_bear_market():
-                # 出现熊市直接清仓
-                await self.clear_all_position(last_price)
-            else:
-                # 不是熊市有2种情况：1.原本就不是熊市（正常情况），2.刚从熊市反转（需要重新建仓）。
-                if len(self.open_orders) == 0:
-                    await self.build_base_position(last_price)
-                    await self.place_open_orders(last_price)
+        # # # A. 趋势过滤：如果是熊市，坚决不建仓
+        # if self.strategy_when_bear == "stop":
+        #     if await self.is_bear_market():
+        #         await self.set_stop_buy(last_price)
+        #     else:
+        #         # 之前是熊市，没有清仓，此时也不需要重新建仓，清除设置即可。
+        #         await self.clear_stop_buy()
+        # elif self.strategy_when_bear == "clear":
+        #     if await self.is_bear_market():
+        #         # 出现熊市直接清仓
+        #         await self.clear_all_position(last_price)
+        #     else:
+        #         # 不是熊市有2种情况：1.原本就不是熊市（正常情况），2.刚从熊市反转（需要重新建仓）。
+        #         if len(self.open_orders) == 0:
+        #             await self.build_base_position(last_price)
+        #             await self.place_open_orders(last_price)
 
-        # 出现异常的补偿
-        # if len(self.open_orders) == 0:
-        #     await self.place_open_orders(last_price=last_price)
         return runtimes
+        
+    async def is_grid_friendly_day(
+        self,
+        macd_diff_threshold: float = 0.15,
+        macd_hist_threshold: float = 0.2,
+    ) -> bool:
+        """
+        判断当日是否适合运行网格策略：
+        1. VXN ∈ [15, 28]
+        2. MACD 无明显趋势（适合震荡）
+        """
+
+        # ---------- 1. 获取标的日线 ----------
+        latest = await self.realtime_data_processor.get_macd(self.symbol)
+        macd_ok = (
+            abs(latest["dif"] - latest["dea"]) < macd_diff_threshold
+            and abs(latest["macd_hist"]) < macd_hist_threshold
+        )
+        if not macd_ok:
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of macd")
+            return False
+
+        # ---------- 3. 获取 VXN ----------
+        vxn_value = await self.realtime_data_processor.get_vxn()
+        if not (15 <= vxn_value <= 28):
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of VXN({vxn_value})")
+            return False
+
+        return True
+        
+    async def _load_runtime_data(self):
+        try:
+            data = {}
+            async with aiofiles.open(self.data_file, 'r') as f:
+                content = await f.read()
+                if content:
+                    data = json.loads(content) # Should be a list of cycle dicts
+        except FileNotFoundError:
+            LoggerManager.Error("app", strategy=f"{self.strategy_id}", event=f"init", content=f"No pending grid cycles file ('{self.data_file}'). Starting fresh for this strategy.")
+        except json.JSONDecodeError:
+            LoggerManager.Error("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Error decoding JSON for {self.strategy_id} from '{self.data_file}'. Starting fresh for this strategy.")
             
+        return data
+    
     # 策略初始化
-    async def InitStrategy(self, cash, position:int = 0):
+    async def InitStrategy(self):
+        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"Init", content=f"Initing Strategy: {self.strategy_id}")
+
         self.is_running = True
         self.start_time = self.realtime_data_processor.get_current_time()
-        self.position = position
-        self.cash = cash
-        # 从文件中恢复前一交易日的数据
-        await self._load_active_grid_cycles()
-        # LoggerManager.Info("app", strategy=f"{self.strategy_id}", params=f"{self}", event="init")
+        # 从文件中读出数据
+        data = await self._load_runtime_data()
         
-        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"价格范围：{self.price_range}, 单格投入：{self.cost_per_grid} 单格价差：{self.grid_spread:.2f}")
-        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash}")
-        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Running.")
+        # 恢复已有持仓
+        # 从盈利历史中恢复可用持仓和资金
+        self.profit_logs = data.get('profits', [])
+        if self.profit_logs:
+            self.recover_curr_position()
+
+        # 恢复运行时参数并执行重平衡
+        await self.rebalance(data)
+        
+        # LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"价格范围：{self.price_range}, 单格投入：{self.cost_per_grid} 单格价差：{self.grid_spread:.2f}")
+        # LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash}")
+        # LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Running.")
         
         return 
 
@@ -423,22 +477,25 @@ class GridStrategy(Strategy):
             self.pending_sell_count -= abs(order.shares)
             self.pending_sell_cost = round(self.pending_sell_cost - abs(order.lmt_price * order.shares), 2)
         else:
-            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="DECREASE", content=f'Order Canceled/Margin/Rejected/Expired: {order.shares}')
+            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="DECREASE", content=f'Order Canceled/Margin/Rejected/Expired: {order.order_id} {order.shares}')
             self.pending_buy_count -= abs(order.shares)
             self.pending_buy_cost = round(self.pending_buy_cost - abs(order.lmt_price * order.shares), 2)
 
         # 如果是熔断清仓单，直接全部清仓
-        if order.order_id == self.clear_order_id:
-            self.clear_order_id = 0
+        if self.clear_order and order.order_id == self.clear_order.order_id:
+            self.clear_order = None
             return
 
         # 取消的是建仓单，直接从建仓单列表中移除
         if order.order_id in self.open_orders:
-            del self.open_orders[order.order_id]
+            self.open_orders.pop(order.order_id, None)
+            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"handle_cancel", content=f"pop order: {order.order_id}, left: {list(self.open_orders.keys())}")
             
         # 如果是平仓单，只更新平仓单状态，不删除，要保留写文件
+        # 是否清除对实盘没影响，对于回测不清理会导致重复cancel
         if order.order_id in self.close_units:
             self.close_units[order.order_id].close_order = order
+            self.close_units.pop(order.order_id, None)
         
         # 最后策略停止运行的检查
         if self.is_running:
@@ -465,10 +522,14 @@ class GridStrategy(Strategy):
             if price < self.price_range[0]:
                 LoggerManager.Error("app", event="grid_buy_failed", strategy=f"{self.strategy_id}", content=f"out of price range, expect {price} but {self.price_range[0]}")
                 return None
+            
+            if self.cash < cost + self.pending_buy_cost:
+                LoggerManager.Error("app", event="grid_buy_failed", strategy=f"{self.strategy_id}", content=f"No enough money, available: {self.cash - self.pending_buy_cost}, want: {cost}")
+                return None
         
-        order = await self.om.place_order(self.symbol, "BUY", size, price, callback=self.update_order_status, tif="DAY", order_ref=order_ref)
+        order = await self.om.place_order(self.symbol, "BUY", size, price, callback=self.update_order_status, tif="GTC", order_ref=order_ref)
         if order:
-            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="INCREASE", content=f"Place BUY order, Price: {price:.2f}, Qty: {size}")
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="INCREASE", content=f"Place BUY order, OrderId: {order.order_id} Price: {price:.2f}, Qty: {size}")
             self.pending_buy_count += abs(size)
             self.pending_buy_cost = round(self.pending_buy_cost + cost, 2)
         else:
@@ -486,7 +547,7 @@ class GridStrategy(Strategy):
                 LoggerManager.Error("app", event="grid_sell_failed", strategy=f"{self.strategy_id}", content=f"out of price range, expect {price} but {self.price_range[1]}")
                 return None
 
-        sell_order = await self.om.place_order(self.symbol, "SELL", size, price, callback=self.update_order_status, tif="DAY", order_ref=order_ref)
+        sell_order = await self.om.place_order(self.symbol, "SELL", size, price, callback=self.update_order_status, tif="GTC", order_ref=order_ref)
         if sell_order:
             self.pending_sell_count += abs(size)
             self.pending_sell_cost = round(self.pending_sell_cost + abs(price * size), 2)
@@ -501,10 +562,12 @@ class GridStrategy(Strategy):
         # 取消当前的所有建仓单，这里只做提交，状态更新事件中会清理
         # 使用 list() 创建副本，避免迭代时修改字典报错
         self.open_orders.pop(dealed_order.order_id, None)
-        for order_id in list(self.open_orders.keys()):
-            ret = await self.om.cancel_order(order_id)
+        for order in list(self.open_orders.values()):
+            ret = await self._cancel_order(order)
             if not ret:
-                LoggerManager.Error("app", event="cancel", strategy=f"{self.strategy_id}", content=f"Cancel failed {order_id} when reflesh_open_orders")
+                LoggerManager.Error("app", event="cancel", strategy=f"{self.strategy_id}", content=f"Cancel failed {order.order_id} when reflesh_open_orders")
+            else:
+                LoggerManager.Debug("app", event="open_cancel", strategy=f"{self.strategy_id}", content=f"Cancel {order.order_id} when reflesh_open_orders")
         
         await self.place_open_orders(dealed_order.lmt_price)
 
@@ -529,22 +592,22 @@ class GridStrategy(Strategy):
         LoggerManager.Warning("app", strategy=f"{self.strategy_id}", event="circuit_breaker_warning", 
                               content=f"WARNING: Cash {self.cash:.2f} below retention fund threshold {self.total_cost * self.retention_fund_ratio:.2f}. Stopping new buys.")
         self.stop_buy = True
-        if self.clear_order_id:
+        if self.clear_order:
             return
         
         # 提交一个买单以触发清仓操作
         buy_price = max(round(current_price - self.grid_spread, 2), self.price_range[0])
         order = await self.grid_buy(buy_price, 1, order_ref="CIRCUIT_BREAKER_CLEAR", force=True)
         if order:
-            self.clear_order_id = order.order_id
+            self.clear_order = order
 
     async def clear_stop_buy(self):
         if self.stop_buy is False:
             return
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="circuit_breaker_cleared", content=f"Circuit breaker cleared. Resuming normal buy operations.")
         self.stop_buy = False
-        if self.clear_order_id:
-            await self.om.cancel_order(self.clear_order_id)
+        if self.clear_order:
+            await self._cancel_order(self.clear_order)
     
     # 阶段三：全部清仓并取消所有挂单.
     async def clear_all_position(self, current_price: float):
@@ -557,7 +620,7 @@ class GridStrategy(Strategy):
             sell_price = round(current_price * 0.995, 2)
             order = await self.grid_sell(sell_price, self.position, order_ref="FORCED_CLEAR", force=True) # 挂低价确保成交
             if order:
-                self.all_clear_order_id = order.order_id
+                self.all_clear_order = order
     
     async def check_circuit_breaker(self, last_price: float):
         """检查是否触发硬止损熔断"""
@@ -579,7 +642,7 @@ class GridStrategy(Strategy):
         
             self.pending_buy_count -= abs(order.done_shares)
             self.pending_buy_cost = round(self.pending_buy_cost - abs(order.done_shares * order.done_price), 2)
-            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="order_deal", content=f'BUY Order EXECUTED, Lmt Price: {order.lmt_price:.2f}, Done Price: {order.done_price} Qty: {order.done_shares:.0f} Id: {order.order_id}')
+            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="order_deal", content=f'BUY Order EXECUTED, Lmt Price: {order.lmt_price:.2f}, Done Price: {order.done_price} Qty: {order.done_shares:.0f} Id: {order.order_id}')
         else:
             await self.clear_stop_buy()
             self.position -= abs(order.done_shares)
@@ -599,19 +662,21 @@ class GridStrategy(Strategy):
             return
         
         # 如果是熔断清仓单，直接全部清仓
-        if order.order_id == self.clear_order_id:
+        if self.clear_order and order.order_id == self.clear_order.order_id:
             LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="circuit_breaker_triggered", content=f"Circuit breaker triggered clear order executed.")
             await self.clear_all_position(order.done_price)
-            self.clear_order_id = 0
+            self.clear_order = None
             return
         
         # 如果是平仓单，记录完成的交易
         if order.order_id in self.close_units:
+            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="close_over", content=f"Close order executed. {order.order_id} @{order.lmt_price} {order.shares}")
             unit = self.close_units[order.order_id]
             self._log_completed_trade(unit.open_order, order)
             self.close_units.pop(order.order_id, None)
             
         if order.order_id in self.open_orders:
+            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="open_over", content=f"Open order executed. {order.order_id} @{order.lmt_price} {order.shares}")
             # 建仓单成交，移除建仓单，提交平仓单，刷新建仓单
             await self.reflesh_open_orders(order)
             order_ref = {"strategy_id": self.strategy_id, "purpose": "CLOSE", "open_order_id": f"{order.order_id}"}
@@ -640,15 +705,25 @@ class GridStrategy(Strategy):
         if order.status in [OrderStatus.Submitted, OrderStatus.Accepted]:
             return
         
-        if order.order_id not in self.open_orders \
-            and order.order_id not in self.close_units \
-            and not (self.base_position_order and order.order_id == self.base_position_order.order_id) \
-            and order.order_id != self.clear_order_id \
-            and order.order_id != self.all_clear_order_id:
+        skip = True
+        if order.order_id in self.open_orders:
+            skip = False
+        if order.order_id in self.close_units:
+            skip = False
+        if self.base_position_order and order.order_id == self.base_position_order.order_id:
+            skip = False
+        if self.all_clear_order and self.all_clear_order.order_id == order.order_id:
+            skip = False
+        if self.clear_order and order.order_id == self.clear_order.order_id:
+            skip = False
+            
+        if skip:
             LoggerManager.Error("app", strategy=f"{self.strategy_id}", event="order_update", content=f"Unknow order: {order}")
             return
         
-        LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"order_update", content=f"Order Update: {order}")
+        LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"order_update", content=f"Orders: {list(self.open_orders.keys())}")
+        LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"order_update", content=f"Orders: {list(self.close_units.keys())}")
+        LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"order_update", content=f"Order Update: {order.order_id} {order.status} {order.lmt_price}")
         async with self.lock:
             # 判断订单状态
             # 如果是取消订单，针对原订单是建仓单还是平仓单做不同处理
@@ -679,7 +754,7 @@ class GridStrategy(Strategy):
 
     # 每日提交初始开仓单
     async def place_open_orders(self, last_price: float):
-        
+        LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="place_open_orders", content=f"place open order: {last_price}")
         buy_price = round(last_price - self.grid_spread, 2)
         order_ref = {"strategy_id": self.strategy_id, "purpose": "OPEN"}
         size = max(round(self.cost_per_grid / buy_price), 1)
@@ -701,13 +776,12 @@ class GridStrategy(Strategy):
     async def _recover_orders_from_file(self, data: Dict[str, Any]):
         # 恢复建仓单
         open_orders = data.get('open_orders', [])
-        if open_orders:
-            for order in open_orders:
-                open_order = GridOrder.from_dict(order)
-                new_order = await self.place_order(open_order.action, open_order.lmt_price, open_order.shares, open_order.order_ref, force=True)
-                if new_order:
-                    self.open_orders[new_order.order_id] = new_order
-        LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="recover_orders", content=f"Open Orders: {list(self.open_orders.keys())}.")
+        for order in open_orders:
+            open_order = GridOrder.from_dict(order)
+            new_order = await self.place_order(open_order.action, open_order.lmt_price, open_order.shares, open_order.order_ref, force=True)
+            if new_order:
+                self.open_orders[new_order.order_id] = new_order
+        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="recover_orders", content=f"Open Orders: {len(open_orders)}.")
 
         # 恢复平仓单
         close_units_data = data.get('close_units', [])
@@ -723,30 +797,7 @@ class GridStrategy(Strategy):
             if new_order:
                 unit.close_order = new_order
                 self.close_units[unit.close_order.order_id] = unit
-        LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="recover_orders", content=f"Close Units: {list(self.close_units.keys())}.")
-
-    # 从文件中读取历史未完成的平仓单，直接挂单，不再参与网格策略
-    async def _load_active_grid_cycles(self):
-        file_path = self.data_file
-        try:
-            async with aiofiles.open(file_path, 'r') as f:
-                content = await f.read()
-                data = {}
-                if content:
-                    data = json.loads(content) # Should be a list of cycle dicts
-
-                # 从盈利历史中恢复可用持仓和资金
-                self.profit_logs = data.get('profits', [])
-                self.recover_curr_position()
-
-                # 恢复运行时参数并执行重平衡
-                await self.rebalance(data)
-                
-
-        except FileNotFoundError:
-            LoggerManager.Error("app", strategy=f"{self.strategy_id}", event=f"init", content=f"No pending grid cycles file ('{file_path}'). Starting fresh for this strategy.")
-        except json.JSONDecodeError:
-            LoggerManager.Error("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Error decoding JSON for {self.strategy_id} from '{file_path}'. Starting fresh for this strategy.")
+        LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="recover_orders", content=f"Close Units: {len(close_units_data)}.")
 
 
     def reorganize_profits(self):   
@@ -818,30 +869,36 @@ class GridStrategy(Strategy):
     def is_final(self, status: OrderStatus) -> bool:
         return status in (OrderStatus.Canceled, OrderStatus.Cancelled, OrderStatus.Completed, OrderStatus.Rejected, OrderStatus.Expired)
 
+    async def _cancel_order(self, order: GridOrder) -> bool:
+        ret = False
+        if order:
+            # 先触发底层订单取消
+            ret = await self.om.cancel_order(order.order_id)
+            
+            # 清理维护的计数器和状态数据
+            LoggerManager.Debug("app", strategy=f"_cancel_order", event=f"_cancel_order", content=f"_cancel_order {order.order_id}")
+            self.handle_order_cancelled(order)
+        return ret
+        
     async def _cancel_active_orders(self):
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"_cancel_active_orders", content=f"Cancelling all active orders for strategy {self.strategy_id}...")
         orders_to_cancel: List[GridOrder] = []
-        for order_id in list(self.open_orders.keys()):
-            LoggerManager.Debug("app", event=f"waiting_for_cancel", strategy=f"{self.strategy_id}", content=f"Preparing to cancel open order {order_id}")
-            orders_to_cancel.append(order_id)
+        for order in list(self.open_orders.values()):
+            LoggerManager.Debug("app", event=f"waiting_for_cancel", strategy=f"{self.strategy_id}", content=f"Preparing to cancel open order {order.order_id}")
+            orders_to_cancel.append(order)
 
-        for order_id in self.close_units.keys():
-            LoggerManager.Debug("app", event=f"waiting_for_cancel", strategy=f"{self.strategy_id}", content=f"Preparing to cancel close order {order_id}")
-            orders_to_cancel.append(order_id)
+        for unit in list(self.close_units.values()):
+            LoggerManager.Debug("app", event=f"waiting_for_cancel", strategy=f"{self.strategy_id}", content=f"Preparing to cancel close order {unit.close_order.order_id}")
+            orders_to_cancel.append(unit.close_order)
 
         # 发起取消（全部异步执行）
-        for order_id in orders_to_cancel:
+        for order in orders_to_cancel:
             try:
-                ret = await self.om.cancel_order(order_id)
+                ret = await self._cancel_order(order)
                 if not ret:
-                    LoggerManager.Error("app", event="cancel_failed", strategy=f"{self.strategy_id}", content=f"Cancel failed {order_id}")
-                # else:
-                #     if order_id in self.open_orders:
-                #         del self.open_orders[order_id]
-                #     if order_id in self.close_units:
-                #         del self.close_units[order_id]
+                    LoggerManager.Error("app", event="cancel_failed", strategy=f"{self.strategy_id}", content=f"Cancel failed {order.order_id}")
             except Exception as e:
-                LoggerManager.Error("app", event=f"cancel_error", strategy=f"{self.strategy_id}", content=f"Cancel failed {order_id}: {e}")
+                LoggerManager.Error("app", event=f"cancel_error", strategy=f"{self.strategy_id}", content=f"Cancel failed {order.order_id}: {e}")
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event=f"stop", content=f"All cancel requests sent for strategy {self.strategy_id}.")
         return 
     

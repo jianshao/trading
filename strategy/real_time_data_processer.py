@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
-from ib_insync import Stock, Ticker
+from ib_insync import Index, Stock, Ticker, util
 import pandas as pd
 from apis.api import BaseAPI
 from data import config
@@ -59,3 +59,36 @@ class RealTimeDataProcessor:
                                 what_to_show: str = 'TRADES', use_rth: bool = True, 
                                 format_date: int = 1, timeout_seconds: int = 60) -> Optional[pd.DataFrame]:
         return await self.api.get_historical_data(symbol, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth, format_date, timeout_seconds)
+
+
+    async def get_macd(self, symbol):
+        df = await self.api.get_historical_data(symbol,
+                                            duration_str="2 M",
+                                            bar_size_setting="1 day")
+
+        if df.empty or len(df) < 35:
+            return None
+
+        # df = util.df(bars)
+
+        # ---------- 2. 计算 MACD ----------
+        df["ema12"] = df["Close"].ewm(span=12).mean()
+        df["ema26"] = df["Close"].ewm(span=26).mean()
+        df["dif"] = df["ema12"] - df["ema26"]
+        df["dea"] = df["dif"].ewm(span=9).mean()
+        df["macd_hist"] = df["dif"] - df["dea"]
+
+        return df.iloc[-1]
+    
+    async def get_vxn(self, durationStr="5 D", barSizeSetting="1 day") -> float:
+        # ---------- 3. 获取 VXN ----------
+        vxn_bars = await self.api.get_historical_data(
+            "VXN",
+            duration_str=durationStr,
+            bar_size_setting=barSizeSetting
+        )
+        if vxn_bars.empty:
+            return 0
+
+        # vxn_df = util.df(vxn_bars)
+        return vxn_bars.iloc[-1]["Close"]
