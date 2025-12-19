@@ -118,6 +118,7 @@ class GridStrategy(Strategy):
         
         self.profit_logs = []
         
+        self.not_today = False
         self.start_time = None
         self.end_time = None
         self.is_running = False
@@ -279,52 +280,41 @@ class GridStrategy(Strategy):
         lower = result['predicted_range']['lower_bound']
         return [lower, upper]
     
-    async def reflesh_config(self, data: Dict[str, Any], last_price: float) -> Dict[str, Any]:
+    async def reflesh_config(self, data: Dict[str, Any]) -> Dict[str, Any]:
         # 每双周做一次配置更新，包括网格价格上下限、单个成本
         runtime = data.get("runtimes", {})
         current_time = self.realtime_data_processor.get_current_time()
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="reflesh_config", content=f"Curr_time: {current_time}, runtime: {runtime}")
         if runtime:
-            self.total_cost = runtime.get('total_cost', 0)
-            self.grid_spread = runtime.get('grid_spread', 1.0)
-            self.price_range = runtime.get('price_range', [])
-            self.cost_per_grid = runtime.get('cost_per_grid', 1000)
             self.last_rebalance = runtime.get('last_rebalance', datetime(2025, 1, 1))
             self.last_rebalance = datetime.fromisoformat(self.last_rebalance) if isinstance(self.last_rebalance, str) else self.last_rebalance
-            
             if current_time - self.last_rebalance < timedelta(days=CYCLE_DAYS_DEFAULT):
-                # 恢复未完成的订单
                 LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_skip", content=f"No rebalance needed. Last rebalance at {self.last_rebalance}, current time {current_time}.")
-                await self._recover_orders_from_file(data)
                 return data
         
         # --- 开始执行新周期重置 ---
         # 3. 更新网格参数 (基于 3倍 ATR)
-        self.last_rebalance = current_time
-        self.price_range = await self.reflesh_price_range()
-        self.grid_spread = round((self.price_range[1]-self.price_range[0]) / self.grid_count, 2)
-        self.cost_per_grid = round(self.total_cost / self.grid_count, 2)
+        # self.last_rebalance = current_time
+        # self.price_range = await self.reflesh_price_range()
+        # self.grid_spread = round((self.price_range[1]-self.price_range[0]) / self.grid_count, 2)
+        # self.cost_per_grid = round(self.total_cost / self.grid_count, 2)
         
-        # 更新单格投入资金 (确保资金被均匀分配到新的较窄区间内)
-        LoggerManager.Info("app", event="rebalance_params", content=f"New Params -> Range: {self.price_range}, Spread: {self.grid_spread}, Cost/Grid: {self.cost_per_grid}")
+        last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
+        result = {
+            "runtimes": {
+                "total_cost": round(self.cash + self.position * last_price),
+                "grid_spread": round((self.price_range[1]-self.price_range[0]) / self.grid_count, 2),
+                "price_range": await self.reflesh_price_range(),
+                "cost_per_grid": round(self.total_cost / self.grid_count, 2),
+                "last_rebalance": current_time,
+            }
+        }
 
         # 新周期开启时先建50%底仓
         await self._cancel_active_orders()
         await self.build_base_position(last_price)
-        # 如果持仓足够挂初始买单，就直接挂初始订单；否则要等待建仓完成后再初始订单
-        if self.position >= round(self.cost_per_grid / last_price):
-            # self.base_position_order = None
-            await self.place_open_orders(last_price)
         
-        return {
-            "runtimes": {
-                "total_cost": round(self.cash + self.position * last_price),
-                "grid_spread": self.grid_spread,
-                "price_range": self.price_range,
-                "cost_per_grid": self.cost_per_grid,
-                "last_rebalance": self.last_rebalance,
-            }
-        }
+        return result
     
     async def is_bear_market(self) -> bool:
         """判断是否处于熊市"""
@@ -358,38 +348,27 @@ class GridStrategy(Strategy):
     # 每双周重新均衡，生成新的价格上下限和中线
     async def rebalance(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """每双周重新均衡，生成新的价格上下限和中线"""
-        # if not await self.is_grid_friendly_day():
-        #     # 当日行情不适合运行
-        #     LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"skip", content=f"not good for running today.")
-        #     return data.get("runtimes", {})
+        if not await self.is_grid_friendly_day():
+            self.not_today = True
+            # 当日行情不适合运行
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"skip", content=f"not good for running today.")
+            return data
         
         # 周期性刷新配置
-        last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
-        runtimes = await self.reflesh_config(data, last_price)
+        data = await self.reflesh_config(data)
         
-        # # # 趋势过滤：如果不跳过熊市检查，则继续建仓
-        # if self.strategy_when_bear == "nothing":
-        #     LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="rebalance_no_bear_check", content=f"Not skipping base position build in bear market.")
-        #     return runtimes
-
-        # # # A. 趋势过滤：如果是熊市，坚决不建仓
-        # if self.strategy_when_bear == "stop":
-        #     if await self.is_bear_market():
-        #         await self.set_stop_buy(last_price)
-        #     else:
-        #         # 之前是熊市，没有清仓，此时也不需要重新建仓，清除设置即可。
-        #         await self.clear_stop_buy()
-        # elif self.strategy_when_bear == "clear":
-        #     if await self.is_bear_market():
-        #         # 出现熊市直接清仓
-        #         await self.clear_all_position(last_price)
-        #     else:
-        #         # 不是熊市有2种情况：1.原本就不是熊市（正常情况），2.刚从熊市反转（需要重新建仓）。
-        #         if len(self.open_orders) == 0:
-        #             await self.build_base_position(last_price)
-        #             await self.place_open_orders(last_price)
-
-        return runtimes
+        runtimes = data.get("runtimes", {})
+        self.price_range = runtimes.get("price_range")
+        self.grid_spread = runtimes.get("grid_spread")
+        self.cost_per_grid = runtimes.get("cost_per_grid")
+        
+        # 更新单格投入资金 (确保资金被均匀分配到新的较窄区间内)
+        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_params", content=f"Params: Range: {self.price_range}, Spread: {self.grid_spread}, Cost/Grid: {self.cost_per_grid}")
+        
+        # 恢复未完成的订单
+        await self._recover_orders_from_file(data)
+        
+        return data
         
     async def is_grid_friendly_day(
         self,
@@ -438,7 +417,6 @@ class GridStrategy(Strategy):
     async def InitStrategy(self):
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"Init", content=f"Initing Strategy: {self.strategy_id}")
 
-        self.is_running = True
         self.start_time = self.realtime_data_processor.get_current_time()
         # 从文件中读出数据
         data = await self._load_runtime_data()
@@ -452,6 +430,7 @@ class GridStrategy(Strategy):
         # 恢复运行时参数并执行重平衡
         await self.rebalance(data)
         
+        self.is_running = True
         # LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"价格范围：{self.price_range}, 单格投入：{self.cost_per_grid} 单格价差：{self.grid_spread:.2f}")
         # LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash}")
         # LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Running.")
@@ -514,6 +493,9 @@ class GridStrategy(Strategy):
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="grid_buy", content=f"Place BUY order, Price: {price:.2f}, Qty: {size}")
         cost = abs(round(price * size, 2))
         if force is False:
+            if not self.is_running:
+                return None
+            
             if self.stop_buy:
                 LoggerManager.Error("app", event="grid_buy_failed", strategy=f"{self.strategy_id}", content=f"Buying stopped due to circuit breaker.")
                 return None
@@ -539,6 +521,9 @@ class GridStrategy(Strategy):
     async def grid_sell(self, price: float, size: float, order_ref: str = "", force: bool = False) -> Optional[GridOrder]:
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="grid_sell", content=f"Place SELL order, Price: {price:.2f}, Qty: {size}")
         if force is False:
+            if not self.is_running:
+                return None
+            
             if self.position - self.pending_sell_count < size:
                 LoggerManager.Error("app", strategy=f"{self.strategy_id}", event="grid_sell_failed", content=f"Not enough position to place SELL order @{price:.2f} for {size} shares. Pending Sell Count: {self.pending_sell_count}, Position: {self.position}")
                 return None
@@ -574,8 +559,6 @@ class GridStrategy(Strategy):
 
     async def place_order(self, action, price, quantity, order_ref, force: bool = False) -> Optional[GridOrder]:
         """提交订单"""
-        if not self.is_running:
-            return None
         
         if action.upper() == "SELL":
             return await self.grid_sell(price, quantity, order_ref, force)
@@ -905,6 +888,9 @@ class GridStrategy(Strategy):
     async def DoStop(self):
         self.is_running = False
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"stop", content=f"Stopping strategy {self.strategy_id}...")
+        if self.not_today:
+            return
+        
         # 保存当前未完成的网格单元，然后取消所有订单
         await self._save_active_grid_cycles()
         await self._cancel_active_orders()

@@ -667,14 +667,14 @@ class IBapi(BaseAPI):
         if realtime_bars:
             # 如果列表不为空，说明最近60秒内有成交（即市场是活跃的）
             # bars[-1].close 就是这一分钟的收盘价，近似等于最新价
-            print(f"[{symbol}] 市场活跃，返回最新实时报价 (含盘前/后)")
+            # print(f"[{symbol}] 市场活跃，返回最新实时报价 (含盘前/后)")
             return realtime_bars[-1].close
 
         # -----------------------------------------------------------
         # 步骤 2: 市场休市，获取前一交易日收盘价
         # 逻辑：请求过去几天的日线数据，useRTH=True (只看正股时间)
         # -----------------------------------------------------------
-        print(f"[{symbol}] 市场休市或无近期成交，获取前一交易日收盘价")
+        # print(f"[{symbol}] 市场休市或无近期成交，获取前一交易日收盘价")
         
         daily_bars = await self.ib.reqHistoricalDataAsync(
             contract,
