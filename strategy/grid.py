@@ -24,7 +24,7 @@ if __name__ == '__main__': # Allow running/importing from different locations
         sys.path.insert(0, project_root)
 
 
-CYCLE_DAYS_DEFAULT = 14
+CYCLE_DAYS_DEFAULT = 21
 GRID_COUNT_DEFAULT = 20
 
 @dataclass
