@@ -23,7 +23,7 @@ from common.strategy import Strategy
 from common.logger_manager import LoggerManager
 
 
-CYCLE_DAYS_DEFAULT = 14
+CYCLE_DAYS_DEFAULT = 21
 
 @dataclass
 class GridUnit:
