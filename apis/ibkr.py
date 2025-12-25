@@ -13,7 +13,7 @@ from ib_insync import *
 import pandas as pd
 
 from data import config
-from strategy import common
+from common import utils as common
 
 if __name__ == '__main__':
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -382,10 +382,10 @@ class IBapi(BaseAPI):
                 print(f"IBapi: No historical data returned for {contract_to_use.localSymbol}")
                 return pd.DataFrame()
         except asyncio.TimeoutError:
-            print(f"IBapi: Timeout fetching historical data for {contract.symbol if contract.symbol else 'N/A'}")
+            print(f"IBapi: Timeout fetching historical data for {symbol if symbol else 'N/A'}")
             return pd.DataFrame()
         except Exception as e:
-            print(f"IBapi: Error fetching historical data for {contract.symbol if contract.symbol else 'N/A'}: {e}")
+            print(f"IBapi: Error fetching historical data for {symbol if symbol else 'N/A'}: {e}")
             import traceback
             traceback.print_exc() # Print full traceback for debugging
             return pd.DataFrame()
@@ -760,3 +760,33 @@ class IBapi(BaseAPI):
         """实盘返回系统当前时间"""
         return datetime.datetime.now(ZoneInfo(config.time_zone))
     
+    
+    async def get_macd(self, symbol):
+        df = await self.get_historical_data(symbol, duration_str="2 M", bar_size_setting="1 day")
+
+        if df.empty or len(df) < 35:
+            return None
+
+        # ---------- 2. 计算 MACD ----------
+        df["ema12"] = df["Close"].ewm(span=12).mean()
+        df["ema26"] = df["Close"].ewm(span=26).mean()
+        df["dif"] = df["ema12"] - df["ema26"]
+        df["dea"] = df["dif"].ewm(span=9).mean()
+        df["macd_hist"] = df["dif"] - df["dea"]
+
+        h0 = df.iloc[-1]["macd_hist"]
+        h1 = df.iloc[-2]["macd_hist"]
+        dif = df.iloc[-1]["dif"]
+        return h0, h1, dif
+    
+    async def get_vxn(self, durationStr="5 D", barSizeSetting="1 day") -> float:
+        vxn_bars = await self.get_historical_data(
+            "VXN",
+            duration_str=durationStr,
+            bar_size_setting=barSizeSetting
+        )
+        if vxn_bars.empty:
+            return 0
+
+        # vxn_df = util.df(vxn_bars)
+        return vxn_bars.iloc[-1]["Close"]

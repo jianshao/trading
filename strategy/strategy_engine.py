@@ -7,20 +7,16 @@ import os
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
-# from zoneinfo import ZoneInfo
 
 import aiofiles
-import clickhouse_connect
-import pandas as pd
 from apis.api import BaseAPI
-from strategy import common
-from strategy.order_manager import OrderManager
-from strategy.real_time_data_processer import RealTimeDataProcessor
-from strategy.strategy import Strategy
+from common import utils
+from common.order_manager import OrderManager
+from common.real_time_data_processer import RealTimeDataProcessor
+from common.strategy import Strategy
 from strategy.grid import GridStrategy
-from utils import mail
-from utils.kafka_producer import KafkaProducerService
-from utils.logger_manager import LoggerManager
+from common.kafka_producer import KafkaProducerService
+from common.logger_manager import LoggerManager
 import data.config as config
 
 
@@ -177,7 +173,7 @@ class GridStrategyEngine:
             
     async def handle_order_update_async(self, trade: Any, order_status: Any):
         if not self.is_running: return
-        order = common.convert_trade_to_gridorder(trade)
+        order = utils.convert_trade_to_gridorder(trade)
         # 根据order_id_strategy获取对应的策略
         strategy_id = self.order_id_strategy_id.get(order.order_id, "")
         if not strategy_id: return
@@ -230,9 +226,9 @@ class GridStrategyEngine:
                             }
                             await self.producer.send_message("daily_profit_logs", data)
                 # 发送日报邮件
-                mail.send_email(f"[每日收益报告] {today.strftime('%Y%m%d')}", common.generate_html(profits_summary))
+                ret = utils.send_email(f"[每日收益报告] {today.strftime('%Y%m%d')}", utils.generate_html(profits_summary))
             else:
-                mail.send_email(f"[出错了] {today.strftime('%Y%m%d')}", "策略启动失败，需要人工处理。")
+                utils.send_email(f"[出错了] {today.strftime('%Y%m%d')}", "策略启动失败，需要人工处理。")
             
             for strategy_id, params in self.strategy_params.items() or {}:
                 self.strategy_result[strategy_id] = await params.DoStop()

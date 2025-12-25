@@ -1,21 +1,12 @@
 #!/usr/bin/python3
 import asyncio
-from ctypes import util
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
 import os
 import sys
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional
 import aiofiles
-import numpy as np
-import pandas as pd
-
-from strategy.common import DailyProfitSummary, OrderStatus, GridOrder
-from strategy.order_manager import OrderManager
-from strategy.real_time_data_processer import RealTimeDataProcessor
-from strategy.strategy import Strategy
-from utils.logger_manager import LoggerManager
 
 if __name__ == '__main__': # Allow running/importing from different locations
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -24,8 +15,15 @@ if __name__ == '__main__': # Allow running/importing from different locations
         sys.path.insert(0, project_root)
 
 
+from common.utils import DailyProfitSummary, OrderStatus, GridOrder
+from base_models.price_range_predict import ATRRangeEstimator
+from common.order_manager import OrderManager
+from common.real_time_data_processer import RealTimeDataProcessor
+from common.strategy import Strategy
+from common.logger_manager import LoggerManager
+
+
 CYCLE_DAYS_DEFAULT = 14
-GRID_COUNT_DEFAULT = 20
 
 @dataclass
 class GridUnit:
@@ -77,9 +75,7 @@ class GridStrategy(Strategy):
         defaults = {
             "symbol": "QQQ",
             "unique_tag": 1,
-            "grid_count": GRID_COUNT_DEFAULT,
             "retention_fund_ratio": 0.2,
-            "strategy_when_bear": "clear", # "clear" or "stop"
             "total_cost": 13000,
             "data_file": "data/strategies/grid",
             "ema_short_period": 12,
@@ -124,6 +120,9 @@ class GridStrategy(Strategy):
         self.is_running = False
         self.stop_buy = False
         self.lock = asyncio.Lock()
+        self.price_range = []
+        self.grid_spread = 1
+        self.cost_per_grid = 1000
         
         self._all_orders_done_event = asyncio.Event()
         self.realtime_data_processor: RealTimeDataProcessor = kwargs.get("real_data_processor", None)
@@ -175,111 +174,26 @@ class GridStrategy(Strategy):
         # 刷新api
         self.api = kwargs.get("api", None)
     
-    def predict_atr_range(self, df, period=14, confidence=0.9):
-        """ATR系数法预测"""
-        # 计算真实波幅TR
-        high_low = df['High'] - df['Low']
-        high_close_prev = (df['High'] - df['Close'].shift(1)).abs()
-        low_close_prev = (df['Low'] - df['Close'].shift(1)).abs()
-        tr = pd.concat([high_low, high_close_prev, low_close_prev], axis=1).max(axis=1)
-        
-        # 计算ATR
-        atr = tr.rolling(period).mean()
-        
-        # 计算历史K值分布
-        future_range = df['High'].shift(-period) - df['Low'].shift(-period)
-        k_ratio = future_range / atr
-        k_90 = k_ratio.dropna().quantile(confidence)
-        
-        # 当前预测
-        current_price = df['Close'].iloc[-1]
-        current_atr = atr.iloc[-1]
-        
-        return {
-            'upper': current_price + current_atr * k_90,
-            'lower': current_price - current_atr * k_90,
-            'k_value': k_90,
-            'current_atr': current_atr
-        }
     
-    def predict_vol_range(self, df, period=14, confidence=0.95):
-        """历史波动率法预测"""
-        returns = df['Close'].pct_change().dropna()
-        daily_vol = returns.rolling(period).std()
-        period_vol = daily_vol * np.sqrt(period)
-        
-        z_score = 1.96 if confidence == 0.95 else 1.65
-        
-        current_price = df['Close'].iloc[-1]
-        current_vol = period_vol.iloc[-1]
-        band = current_price * current_vol * z_score
-        
-        return {
-            'upper': current_price + band,
-            'lower': current_price - band,
-            'current_vol': current_vol
-        }
-    
-    def predict_bb_range(self, df, period=14):
-        """布林带扩展法预测"""
-        ema = df['Close'].ewm(span=period).mean()
-        std = df['Close'].rolling(period).std()
-        
-        current_price = df['Close'].iloc[-1]
-        current_ema = ema.iloc[-1]
-        current_std = std.iloc[-1]
-        
-        # 动态调整K值
-        deviation = abs(current_price - current_ema) / current_std
-        k = 2.0 if deviation < 1 else 2.4
-        
-        return {
-            'upper': current_ema + k * current_std,
-            'lower': current_ema - k * current_std,
-            'k_adj': k
-        }
-    
-    def hybrid_prediction(self, df, weights=(0.6, 0.3, 0.1)):
-        """混合预测框架"""
-        # 三种方法分别预测
-        atr_pred = self.predict_atr_range(df)
-        vol_pred = self.predict_vol_range(df)
-        bb_pred = self.predict_bb_range(df)
-        
-        # 加权组合
-        w_atr, w_vol, w_bb = weights
-        
-        upper_bound = w_atr * atr_pred['upper'] + w_vol * vol_pred['upper'] + w_bb * bb_pred['upper']
-        lower_bound = w_atr * atr_pred['lower'] + w_vol * vol_pred['lower'] + w_bb * bb_pred['lower']
-        
-        # 当前价格
-        current_price = df['Close'].iloc[-1]
-        
-        return {
-            'symbol': df['symbol'].iloc[0] if 'symbol' in df.columns else 'Unknown',
-            'current_price': current_price,
-            'predicted_range': {
-                'upper_bound': round(upper_bound, 2),
-                'lower_bound': round(lower_bound, 2),
-                'range_width_pct': round((upper_bound - lower_bound) / current_price * 100, 2)
-            },
-            'components': {
-                'atr': atr_pred,
-                'volatility': vol_pred,
-                'bollinger': bb_pred
-            },
-            'weights': weights
-        }
-        
-    async def reflesh_price_range(self):
+    async def reflesh_grid_params(self, last_price: float):
         current_time = self.realtime_data_processor.get_current_time().strftime("%Y%m%d-%H:%M:%S")
-        df = await self.realtime_data_processor.get_historical_data(self.symbol, end_date_time=current_time, bar_size_setting="1 day", duration_str="60 D")
+        df = await self.realtime_data_processor.get_historical_data(self.symbol, end_date_time=current_time, bar_size_setting="1 day", duration_str="40 D")
         df['symbol'] = self.symbol  # 添加合约标识
-        result = self.hybrid_prediction(df, weights=(0.6, 0.3, 0.1))
-        upper = result['predicted_range']['upper_bound']
-        lower = result['predicted_range']['lower_bound']
-        return [lower, upper]
-    
+        
+        coifcients = {
+            "TQQQ": 1.2,
+            "NLY": 1.1,
+            "QQQ": 1.15
+        }
+        atr = await self.realtime_data_processor.get_atr(self.symbol)
+        re = ATRRangeEstimator(k=coifcients.get(self.symbol, 1.1))
+        range = re.predict(last_price, atr, 14)
+        upper = range.get("upper", 0)
+        lower = range.get("lower", 0)
+
+        grid_count = 20
+        return [lower, upper], grid_count
+        
     async def reflesh_config(self, data: Dict[str, Any]) -> Dict[str, Any]:
         # 每双周做一次配置更新，包括网格价格上下限、单个成本
         runtime = data.get("runtimes", {})
@@ -293,67 +207,50 @@ class GridStrategy(Strategy):
                 return data
         
         # --- 开始执行新周期重置 ---
-        # 3. 更新网格参数 (基于 3倍 ATR)
-        # self.last_rebalance = current_time
-        # self.price_range = await self.reflesh_price_range()
-        # self.grid_spread = round((self.price_range[1]-self.price_range[0]) / self.grid_count, 2)
-        # self.cost_per_grid = round(self.total_cost / self.grid_count, 2)
-        
         last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
-        result = {
-            "runtimes": {
-                "total_cost": round(self.cash + self.position * last_price),
-                "grid_spread": round((self.price_range[1]-self.price_range[0]) / self.grid_count, 2),
-                "price_range": await self.reflesh_price_range(),
-                "cost_per_grid": round(self.total_cost / self.grid_count, 2),
-                "last_rebalance": current_time,
-            }
-        }
-
+        price_range, grid_count = await self.reflesh_grid_params(last_price)
+        
         # 新周期开启时先建50%底仓
         await self._cancel_active_orders()
         await self.build_base_position(last_price)
         
-        return result
-    
-    async def is_bear_market(self) -> bool:
-        """判断是否处于熊市"""
-        # TODO：增加VIX等指标判断
-        ema12 = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_short_period)
-        ema26 = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_long_period)
-        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="bear_market_check", content=f"EMA12: {ema12}, EMA26: {ema26}")
-        return ema12 < ema26
+        return {
+            "runtimes": {
+                "total_cost": round(self.cash + self.position * last_price),
+                "grid_spread": round((price_range[1]-price_range[0]) / grid_count, 2),
+                "price_range": price_range,
+                "cost_per_grid": round(self.total_cost / grid_count, 2),
+                "last_rebalance": current_time,
+            }
+        }
     
     async def build_base_position(self, last_price: float):
         order = None
-        # 从熊市恢复，建立50%底仓，并开启新周期订单
+        # 开启新周期建立50%底仓
         target_value = self.total_cost * 0.5
         # 计算当前持仓市值 (包含之前周期被套住的持仓)
-        current_value = self.position * last_price
-        diff_value = target_value - current_value
-        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="build_base_position", content=f"TotalCost: {self.total_cost} CurrValue: {current_value}({self.position}, {last_price}).")
-        if diff_value > 0:
-            # 只有当持仓不足 50% 时，才买入差额
-            quantity_to_buy = round(diff_value / last_price)
-            if quantity_to_buy > 0:
-                LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_base_position", content=f"Building base position. Target Value: {target_value}, Current Value: {current_value}, Buying Qty: {quantity_to_buy} at Price: {last_price}")
-                # 由于是开盘前，可以用当前价或稍高的限价单
-                buy_price = round(last_price * 1.02, 2)
-                order = await self.grid_buy(buy_price, quantity_to_buy, order_ref="BASE_POSITION_BUILD", force=True)
-                if order:
-                    self.base_position_order = order
+        diff_value = max(target_value - self.position * last_price, 0)
+        quantity_to_buy = max(round(diff_value / last_price), 1)
+        buy_price = round(last_price * 1.02, 2)
+        content=f"Building base position. Target Value: {target_value}, Diff Value: {diff_value}, Buying Qty: {quantity_to_buy} at Price: {last_price}"
+        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="build_base_position", content=content)
+        order = await self.grid_buy(buy_price, quantity_to_buy, order_ref="BASE_POSITION_BUILD", force=True)
+        if order:
+            self.base_position_order = order
+
         return order
 
     
     # 每双周重新均衡，生成新的价格上下限和中线
     async def rebalance(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """每双周重新均衡，生成新的价格上下限和中线"""
-        if not await self.is_grid_friendly_day():
-            self.not_today = True
-            # 当日行情不适合运行
-            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"skip", content=f"not good for running today.")
-            return data
+        # if not await self.is_grid_friendly_day():
+        #     self.not_today = True
+        #     # 当日行情不适合运行
+        #     LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"skip", content=f"not good for running today.")
+        #     return data
         
+        self.not_today = False
         # 周期性刷新配置
         data = await self.reflesh_config(data)
         
@@ -361,6 +258,7 @@ class GridStrategy(Strategy):
         self.price_range = runtimes.get("price_range")
         self.grid_spread = runtimes.get("grid_spread")
         self.cost_per_grid = runtimes.get("cost_per_grid")
+        self.last_rebalance = runtimes.get("last_rebalance")
         
         # 更新单格投入资金 (确保资金被均匀分配到新的较窄区间内)
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_params", content=f"Params: Range: {self.price_range}, Spread: {self.grid_spread}, Cost/Grid: {self.cost_per_grid}")
@@ -372,8 +270,9 @@ class GridStrategy(Strategy):
         
     async def is_grid_friendly_day(
         self,
-        macd_diff_threshold: float = 0.15,
-        macd_hist_threshold: float = 0.2,
+        hist_limit: float = 0.8,
+        hist_expand_ratio: float = 1.4,
+        dif_limit: float = 2.0,
     ) -> bool:
         """
         判断当日是否适合运行网格策略：
@@ -382,18 +281,26 @@ class GridStrategy(Strategy):
         """
 
         # ---------- 1. 获取标的日线 ----------
-        latest = await self.realtime_data_processor.get_macd(self.symbol)
-        macd_ok = (
-            abs(latest["dif"] - latest["dea"]) < macd_diff_threshold
-            and abs(latest["macd_hist"]) < macd_hist_threshold
-        )
-        if not macd_ok:
-            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of macd")
+        h0, h1, dif = await self.realtime_data_processor.get_macd(self.symbol)
+
+        # 1. 柱子不过度放大
+        if abs(h0) > hist_limit:
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of 柱子不过度放大")
+            return False
+
+        # 2. 防止趋势突然加速
+        if abs(h1) > 0 and abs(h0) / abs(h1) > hist_expand_ratio:
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of 趋势突然加速")
+            return False
+
+        # 3. 防止远离零轴的强趋势
+        if abs(dif) > dif_limit:
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of 远离零轴的强趋势")
             return False
 
         # ---------- 3. 获取 VXN ----------
         vxn_value = await self.realtime_data_processor.get_vxn()
-        if not (15 <= vxn_value <= 28):
+        if not (14 <= vxn_value <= 28):
             LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of VXN({vxn_value})")
             return False
 
@@ -430,12 +337,12 @@ class GridStrategy(Strategy):
         # 恢复运行时参数并执行重平衡
         await self.rebalance(data)
         
-        self.is_running = True
-        # LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"价格范围：{self.price_range}, 单格投入：{self.cost_per_grid} 单格价差：{self.grid_spread:.2f}")
-        # LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash}")
-        # LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Running.")
+        if not self.not_today:
+            self.is_running = True
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"价格范围：{self.price_range}, 单格投入：{self.cost_per_grid} 单格价差：{self.grid_spread:.2f}")
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"当前持仓：{self.position:.0f} 可用资金：{self.cash}")
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"init", content=f"Running.")
         
-        return 
 
     def run(self):
         positions = self.om.ib.get_current_positions()

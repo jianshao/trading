@@ -3,20 +3,16 @@ import json
 import os
 import pickle
 import time
-from ib_insync import Order, Stock, Trade
-from matplotlib import pyplot as plt
 import pandas as pd
-from backtest.common import common
 import redis
 from typing import Any, Callable, Coroutine, Dict, List, Optional
-from io import StringIO
 import backtrader as bt
 
 from apis.ibkr import IBapi
 from apis.api import BaseAPI
-from strategy.common import OrderStatus
+from common.utils import OrderStatus
 from strategy.grid import GridOrder
-from utils.logger_manager import LoggerManager
+from common.logger_manager import LoggerManager
 
 class MockApi(BaseAPI):
     def __init__(self, bt_api: bt.Strategy = None, ib_api: IBapi = None, symbol: str = ""):
@@ -265,6 +261,17 @@ class MockApi(BaseAPI):
         else:
             # 如果有其他周期，需要在这里扩展，或者用 dict 映射
             return 0
+        
+    async def get_macd(self, symbol):
+        # print(self.bt_api.macd.lines.getlinealiases())
+        h0 = self.bt_api.macd.histo[0]
+        h1 = self.bt_api.macd.histo[-1]
+        dif = self.bt_api.macd.macd[0]
+        return h0, h1, dif
+    
+    async def get_vxn(self, durationStr="5 D", barSizeSetting="1 day") -> float:
+        # return 20
+        return self.bt_api.vxn[0]
     
     def get_current_time(self) -> datetime:
         """实盘返回系统当前时间"""

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, Callable, Any, List, Dict, Coroutine, Union # Added Union
 import pandas as pd
 
-from strategy.common import GridOrder
+from common.utils import GridOrder
 
 # --- Forward declarations for type hints if using concrete ib_insync types in ABC ---
 # These are not strictly necessary for ABC if using Any, but good for clarity if you
@@ -171,4 +171,12 @@ class BaseAPI(ABC):
     
     @abstractmethod
     def get_current_time(self) -> datetime:
+        pass
+    
+    @abstractmethod
+    async def get_macd(self, symbol):
+        pass
+    
+    @abstractmethod
+    async def get_vxn(self, durationStr="5 D", barSizeSetting="1 day") -> float:
         pass

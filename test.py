@@ -11,8 +11,8 @@ from data import config
 from ib_client_manager import IBClientManager
 from strategy.strategy_engine import GridStrategyEngine
 from utils import utils
-from utils.kafka_producer import KafkaProducerService
-from utils.logger_manager import LoggerManager
+from common.kafka_producer import KafkaProducerService
+from common.logger_manager import LoggerManager
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
