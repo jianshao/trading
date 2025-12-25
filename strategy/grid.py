@@ -8,6 +8,8 @@ import sys
 from typing import Dict, List, Any, Optional
 import aiofiles
 
+from common import utils
+
 if __name__ == '__main__': # Allow running/importing from different locations
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(current_dir, '..'))
@@ -200,9 +202,8 @@ class GridStrategy(Strategy):
         current_time = self.realtime_data_processor.get_current_time()
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="reflesh_config", content=f"Curr_time: {current_time}, runtime: {runtime}")
         if runtime:
-            self.last_rebalance = runtime.get('last_rebalance', datetime(2025, 1, 1))
-            self.last_rebalance = datetime.fromisoformat(self.last_rebalance) if isinstance(self.last_rebalance, str) else self.last_rebalance
-            if current_time - self.last_rebalance < timedelta(days=CYCLE_DAYS_DEFAULT):
+            self.last_rebalance = utils.to_datetime(runtime.get('last_rebalance', ""))
+            if self.last_rebalance and current_time - self.last_rebalance < timedelta(days=CYCLE_DAYS_DEFAULT):
                 LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_skip", content=f"No rebalance needed. Last rebalance at {self.last_rebalance}, current time {current_time}.")
                 return data
         
@@ -214,9 +215,18 @@ class GridStrategy(Strategy):
         await self._cancel_active_orders()
         await self.build_base_position(last_price)
         
+        price_range, grid_count = await self.reflesh_grid_params(last_price)
+        
+        # 新周期开启时先建50%底仓
+        await self._cancel_active_orders()
+        await self.build_base_position(last_price)
+        
         return {
             "runtimes": {
                 "total_cost": round(self.cash + self.position * last_price),
+                "grid_spread": round((price_range[1]-price_range[0]) / grid_count, 2),
+                "price_range": price_range,
+                "cost_per_grid": round(self.total_cost / grid_count, 2),
                 "grid_spread": round((price_range[1]-price_range[0]) / grid_count, 2),
                 "price_range": price_range,
                 "cost_per_grid": round(self.total_cost / grid_count, 2),
@@ -255,6 +265,7 @@ class GridStrategy(Strategy):
         data = await self.reflesh_config(data)
         
         runtimes = data.get("runtimes", {})
+        self.last_rebalance = utils.to_datetime(runtimes.get("last_rebalance", ""))
         self.price_range = runtimes.get("price_range")
         self.grid_spread = runtimes.get("grid_spread")
         self.cost_per_grid = runtimes.get("cost_per_grid")

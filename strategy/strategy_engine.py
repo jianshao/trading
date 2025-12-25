@@ -56,13 +56,8 @@ class GridStrategyEngine:
             defaults = {
                 "symbol": "QQQ",
                 "unique_tag": 1,
-                "cycle_days": 14,
-                "count_of_atr_for_price_range": 5,
-                "atr_coefficient_of_grid_spread": 0.5,
                 "retention_fund_ratio": 0.2,
-                "skip_bear": True,
-                "total_cost": 13000,
-                "max_position_pct": 0.8
+                "total_cost": 13000
             }
 
             defaults.update(param)

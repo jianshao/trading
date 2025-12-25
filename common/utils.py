@@ -252,3 +252,10 @@ def send_email(subject: str, body: str) -> any:
     except Exception as e:
         return e
         # LoggerManager.Error("app", strategy="mail", event="send_email", content=f"Email sent to {receiver_email} with subject: {subject} failed. Error: {e}")
+
+def to_datetime(s) -> datetime.datetime:
+    if isinstance(s, str):
+        return datetime.datetime.fromisoformat(s)
+    if isinstance(s, datetime.datetime):
+        return s
+    return None
