@@ -1,6 +1,7 @@
 import datetime
 from enum import Enum
 from zoneinfo import ZoneInfo
+import holidays
 import ib_insync
 import smtplib
 from email.mime.text import MIMEText
@@ -259,3 +260,21 @@ def to_datetime(s) -> datetime.datetime:
     if isinstance(s, datetime.datetime):
         return s
     return None
+
+def is_us_stock_open() -> bool:
+    """
+    判断给定日期是否是美股开盘日 (NYSE/NASDAQ)
+    :param date: datetime.date, 默认为今天
+    :return: bool
+    """
+    date = datetime.date.today()
+    # 周六周日不开盘
+    if date.weekday() >= 5:  # 5=周六, 6=周日
+        return False
+
+    # 美国节假日
+    us_holidays = holidays.US(years=date.year)
+    if date in us_holidays:
+        return False
+
+    return True

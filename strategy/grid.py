@@ -202,9 +202,9 @@ class GridStrategy(Strategy):
         current_time = self.realtime_data_processor.get_current_time()
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="reflesh_config", content=f"Curr_time: {current_time}, runtime: {runtime}")
         if runtime:
-            self.last_rebalance = utils.to_datetime(runtime.get('last_rebalance', ""))
-            if self.last_rebalance and current_time - self.last_rebalance < timedelta(days=CYCLE_DAYS_DEFAULT):
-                LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_skip", content=f"No rebalance needed. Last rebalance at {self.last_rebalance}, current time {current_time}.")
+            last_rebalance = utils.to_datetime(runtime.get('last_rebalance', ""))
+            if last_rebalance and current_time - last_rebalance < timedelta(days=CYCLE_DAYS_DEFAULT):
+                LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_skip", content=f"No rebalance needed. Last rebalance at {last_rebalance}, current time {current_time}.")
                 return data
         
         # --- 开始执行新周期重置 ---
@@ -269,7 +269,6 @@ class GridStrategy(Strategy):
         self.price_range = runtimes.get("price_range")
         self.grid_spread = runtimes.get("grid_spread")
         self.cost_per_grid = runtimes.get("cost_per_grid")
-        self.last_rebalance = runtimes.get("last_rebalance")
         
         # 更新单格投入资金 (确保资金被均匀分配到新的较窄区间内)
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_params", content=f"Params: Range: {self.price_range}, Spread: {self.grid_spread}, Cost/Grid: {self.cost_per_grid}")
