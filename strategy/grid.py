@@ -79,8 +79,10 @@ class GridStrategy(Strategy):
             "unique_tag": 1,
             "retention_fund_ratio": 0.2,
             "total_cost": 13000,
+            "skip": False,
             "data_file": "data/strategies/grid",
             "ema_short_period": 12,
+            "ema_middle_period": 7,
             "ema_long_period": 26,
         }
         defaults.update(kwargs)
@@ -178,10 +180,6 @@ class GridStrategy(Strategy):
     
     
     async def reflesh_grid_params(self, last_price: float):
-        current_time = self.realtime_data_processor.get_current_time().strftime("%Y%m%d-%H:%M:%S")
-        df = await self.realtime_data_processor.get_historical_data(self.symbol, end_date_time=current_time, bar_size_setting="1 day", duration_str="40 D")
-        df['symbol'] = self.symbol  # 添加合约标识
-        
         coifcients = {
             "TQQQ": 1.2,
             "NLY": 1.1,
@@ -196,7 +194,7 @@ class GridStrategy(Strategy):
         grid_count = 20
         return [lower, upper], grid_count
         
-    async def reflesh_config(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def reflesh_config(self, data: Dict[str, Any], last_price: float) -> Dict[str, Any]:
         # 每双周做一次配置更新，包括网格价格上下限、单个成本
         runtime = data.get("runtimes", {})
         current_time = self.realtime_data_processor.get_current_time()
@@ -208,13 +206,7 @@ class GridStrategy(Strategy):
                 return data
         
         # --- 开始执行新周期重置 ---
-        last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
-        price_range, grid_count = await self.reflesh_grid_params(last_price)
-        
-        # 新周期开启时先建50%底仓
-        await self._cancel_active_orders()
-        await self.build_base_position(last_price)
-        
+        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance", content=f"Rebalance at current time {current_time}.")
         price_range, grid_count = await self.reflesh_grid_params(last_price)
         
         # 新周期开启时先建50%底仓
@@ -224,9 +216,6 @@ class GridStrategy(Strategy):
         return {
             "runtimes": {
                 "total_cost": round(self.cash + self.position * last_price),
-                "grid_spread": round((price_range[1]-price_range[0]) / grid_count, 2),
-                "price_range": price_range,
-                "cost_per_grid": round(self.total_cost / grid_count, 2),
                 "grid_spread": round((price_range[1]-price_range[0]) / grid_count, 2),
                 "price_range": price_range,
                 "cost_per_grid": round(self.total_cost / grid_count, 2),
@@ -254,21 +243,24 @@ class GridStrategy(Strategy):
     # 每双周重新均衡，生成新的价格上下限和中线
     async def rebalance(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """每双周重新均衡，生成新的价格上下限和中线"""
-        # if not await self.is_grid_friendly_day():
-        #     self.not_today = True
-        #     # 当日行情不适合运行
-        #     LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"skip", content=f"not good for running today.")
-        #     return data
+        last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
+        if not await self.is_grid_friendly_day():
+            self.not_today = True
+            # 当日行情不适合运行
+            await self.clear_all_position(last_price)
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"skip", content=f"not good for running today.")
+            return {}
         
         self.not_today = False
         # 周期性刷新配置
-        data = await self.reflesh_config(data)
+        data = await self.reflesh_config(data, last_price)
         
         runtimes = data.get("runtimes", {})
         self.last_rebalance = utils.to_datetime(runtimes.get("last_rebalance", ""))
         self.price_range = runtimes.get("price_range")
         self.grid_spread = runtimes.get("grid_spread")
         self.cost_per_grid = runtimes.get("cost_per_grid")
+        self.total_cost = runtimes.get("total_cost")
         
         # 更新单格投入资金 (确保资金被均匀分配到新的较窄区间内)
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_params", content=f"Params: Range: {self.price_range}, Spread: {self.grid_spread}, Cost/Grid: {self.cost_per_grid}")
@@ -290,6 +282,28 @@ class GridStrategy(Strategy):
         2. MACD 无明显趋势（适合震荡）
         """
 
+        if not self.skip:
+            return True
+        
+        ema_short = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_short_period)
+        ema_middle = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_middle_period)
+        ema_long = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_long_period)
+        adx = await self.realtime_data_processor.get_adx()
+        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"EMA: {ema_short}, {ema_middle}, {ema_long}, ADX:{adx}")
+    
+        # if self.adx[0] > self.p.adx_threshold and self.ma5[0] < self.ma7[0] and self.macd.macd < self.macd.signal:
+        #     is_downtrend = True
+        # # if self.macd.macd < self.macd.signal:
+        # #     is_downtrend = True
+        # if self.ma5[0] < self.ma20[0]:
+        #     is_downtrend = True
+            
+        if adx > 30 and ema_short < ema_middle:
+            return False
+        if ema_short < ema_long:
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of EMA: {ema_short} < {ema_long} ADX({adx})")
+            return False
+        return True
         # ---------- 1. 获取标的日线 ----------
         h0, h1, dif = await self.realtime_data_processor.get_macd(self.symbol)
 
@@ -310,7 +324,7 @@ class GridStrategy(Strategy):
 
         # ---------- 3. 获取 VXN ----------
         vxn_value = await self.realtime_data_processor.get_vxn()
-        if not (14 <= vxn_value <= 28):
+        if vxn_value > 29:
             LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of VXN({vxn_value})")
             return False
 
@@ -542,7 +556,7 @@ class GridStrategy(Strategy):
         
             self.pending_buy_count -= abs(order.done_shares)
             self.pending_buy_cost = round(self.pending_buy_cost - abs(order.done_shares * order.done_price), 2)
-            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="order_deal", content=f'BUY Order EXECUTED, Lmt Price: {order.lmt_price:.2f}, Done Price: {order.done_price} Qty: {order.done_shares:.0f} Id: {order.order_id}')
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="order_deal", content=f'BUY Order EXECUTED, Lmt Price: {order.lmt_price:.2f}, Done Price: {order.done_price} Qty: {order.done_shares:.0f} Id: {order.order_id}')
         else:
             await self.clear_stop_buy()
             self.position -= abs(order.done_shares)
@@ -550,7 +564,7 @@ class GridStrategy(Strategy):
             
             self.pending_sell_count -= abs(order.done_shares)
             self.pending_sell_cost = round(self.pending_sell_cost - abs(order.done_shares * order.done_price), 2)
-            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="order_deal", content=f'SELL Order EXECUTED, LmtPrice: {order.lmt_price} DonePrice: {order.done_price:.2f}, Qty: {order.done_shares:.0f} Id: {order.order_id}')
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="order_deal", content=f'SELL Order EXECUTED, LmtPrice: {order.lmt_price} DonePrice: {order.done_price:.2f}, Qty: {order.done_shares:.0f} Id: {order.order_id}')
 
 
         # 如果是初始建仓单成交，触发初始订单提交
@@ -576,7 +590,7 @@ class GridStrategy(Strategy):
             self.close_units.pop(order.order_id, None)
             
         if order.order_id in self.open_orders:
-            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="open_over", content=f"Open order executed. {order.order_id} @{order.lmt_price} {order.shares}")
+            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="open_over", content=f"Open order executed. {order.order_id} @{order.lmt_price} {order.shares}")
             # 建仓单成交，移除建仓单，提交平仓单，刷新建仓单
             await self.reflesh_open_orders(order)
             order_ref = {"strategy_id": self.strategy_id, "purpose": "CLOSE", "open_order_id": f"{order.order_id}"}

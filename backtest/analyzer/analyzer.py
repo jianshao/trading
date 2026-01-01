@@ -86,7 +86,7 @@ class OptimizationEngine:
                 # 标准策略对象
                 keys_map = {
                   'symbol': "Symbol",
-                  'retention_fund_ratio': "FundRatio",
+                #   'retention_fund_ratio': "FundRatio",
                 }
                 params = {keys_map[key]: getattr(strat.params, key) for key in list(keys_map.keys())}
             else:
@@ -129,7 +129,7 @@ class OptimizationEngine:
                 'FinalValue': final_value,
                 'Profit': profit,
                 'Return(%)': return_pct,
-                'CalmarRatio': round(profit/maxdown, 2),
+                'CalmarRatio': round(profit/maxdown, 2) if maxdown != 0 else 0,
                 'MaxDrawdown(%)': maxdown,
                 'SharpeRatio': round(sharpe, 3),
                 # 'WinRate(%)': win_rate,
@@ -156,8 +156,8 @@ class OptimizationEngine:
         df = self.df_results.sort_values(by=sort_by, ascending=False).head(top_n)
         
         # 创建画布
-        fig, axes = plt.subplots(2, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [2, 1]})
-        
+        fig, axes = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [2, 1]})
+
         # 图1: 资金曲线
         ax_curve = axes[0]
         ax_curve.set_title(f"Equity Curves (Top {top_n} by {sort_by})")
@@ -192,6 +192,19 @@ class OptimizationEngine:
         table.set_fontsize(9)
         
         plt.tight_layout()
+        # === 修改核心部分：设置全屏/最大化 ===
+        try:
+            manager = plt.get_current_fig_manager()
+            # 方法A：完全全屏模式（无标题栏，最彻底的铺满）
+            manager.full_screen_toggle()
+            
+            # 方法B：如果不想完全全屏（保留关闭按钮），可以用下面的代码替换上面那行：
+            # if hasattr(manager.window, 'state'):
+            #     manager.window.state('zoomed')  # Windows TkAgg
+            # elif hasattr(manager.window, 'showMaximized'):
+            #     manager.window.showMaximized()  # Qt4Agg/Qt5Agg
+        except Exception as e:
+            print(f"尝试全屏失败，使用默认尺寸: {e}")
         plt.show()
         
     def run_is_oos_validation(self, strategy_cls, data_feed, 

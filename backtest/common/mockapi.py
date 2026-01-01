@@ -258,6 +258,10 @@ class MockApi(BaseAPI):
             return self.bt_api.ema12[0]
         elif ema_period == 26:
             return self.bt_api.ema26[0]
+        elif ema_period == 5:
+            return self.bt_api.ema5[0]
+        elif ema_period == 7:
+            return self.bt_api.ema7[0]
         else:
             # 如果有其他周期，需要在这里扩展，或者用 dict 映射
             return 0
@@ -290,3 +294,7 @@ class MockApi(BaseAPI):
         if bt_time.tzinfo is None:
              return bt_time.replace(tzinfo=ZoneInfo(config.time_zone))
         return bt_time
+
+
+    async def get_adx(self, durationStr="5 D", barSizeSetting="1 day") -> float:
+        return self.bt_api.adx[0]

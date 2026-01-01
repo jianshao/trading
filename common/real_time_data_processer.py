@@ -56,3 +56,6 @@ class RealTimeDataProcessor:
     
     async def get_vxn(self, durationStr="5 D", barSizeSetting="1 day") -> float:
         return await self.api.get_vxn(durationStr, barSizeSetting)
+
+    async def get_adx(self, durationStr="5 D", barSizeSetting="1 day") -> float:
+        return await self.api.get_adx(durationStr=durationStr, barSizeSetting=barSizeSetting)

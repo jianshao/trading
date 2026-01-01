@@ -10,7 +10,7 @@ if __name__ == '__main__': # Allow running/importing from different locations
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
-from backtest.common import data_fetcher
+from backtest.common import data_fetcher, utils
 from backtest.common.mockapi import MockApi
 from strategy.grid import GridStrategy
 from common.order_manager import OrderManager
@@ -28,8 +28,12 @@ class GridStrategyBT(bt.Strategy):
         ('unique_tag', '1'),
         ('total_cost', choose_total_cost),
         ('retention_fund_ratio', 0.2),
+        ('ema_long_period', 20),
+        ('ema_middle_period', 7),
+        ('ema_short_period', 5),
         
-        ('api', None)
+        ('api', None),
+        ('skip', True)
     )
 
 
@@ -43,9 +47,11 @@ class GridStrategyBT(bt.Strategy):
         # 增加一个标志位，确保 InitStrategy 只运行一次
         self.strategy_initialized = False
         self.atr  = bt.indicators.ATR(self.datas[1], period=14)
-        # self.ema5 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=5)
+        self.adx = bt.indicators.ADX(self.datas[1], period=14)
+        self.ema5 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=self.p.ema_short_period)
+        self.ema7 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=self.p.ema_middle_period)
         self.ema12 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=12)
-        self.ema20 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=20)
+        self.ema20 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=self.p.ema_long_period)
         self.ema26 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=26)
         self.macd = bt.indicators.MACDHisto(self.datas[1], 
                                             period_me1=12,  # 快线周期
@@ -76,6 +82,10 @@ class GridStrategyBT(bt.Strategy):
             "unique_tag": 1,
             "total_cost": self.p.total_cost,
             "retention_fund_ratio": self.p.retention_fund_ratio,
+            "skip": self.p.skip,
+            "ema_long_period": self.p.ema_long_period,
+            "ema_middle_period": self.p.ema_middle_period,
+            "ema_short_period": self.p.ema_short_period,
             "data_file": f"data/mock/strategies/grid/{self.p.symbol}.json",
             # 【核心】注入适配器
             "real_data_processor": processor
@@ -97,6 +107,7 @@ class GridStrategyBT(bt.Strategy):
     def start(self):
         """Called once at the beginning of the backtest."""
         self.log('Strategy Starting...', level=1)
+        self.log(f"{self.p.skip} {self.p.ema_short_period} {self.p.ema_middle_period} {self.p.ema_long_period}", level=1)
 
         # self.loop.run_until_complete(self.grid.InitStrategy(self.broker.get_cash()))
         
@@ -109,14 +120,14 @@ class GridStrategyBT(bt.Strategy):
         MODIFIED: It now correctly calculates the closing target for dynamic spacing.
         """
         self.log('notify order...', level=0)
-        self.loop.run_until_complete(self.grid.update_order_status(data_fetcher.buildGridOrder(order)))
+        self.loop.run_until_complete(self.grid.update_order_status(utils.buildGridOrder(order)))
 
     # 在执行bar数据之前调用。第一条bar的处理前不会执行next_open，也就是说需要在start中初始化一次。
     def next_open(self):
         # 1. 【预热检查】数据太少时，指标计算不出来，会报错或返回 NaN
         # 你的策略至少需要 MA20 和 ATR(14)，建议至少等 20 个 bar
         # 如果你用了 MA60，这里必须写 60
-        if pd.isna(self.ema26[0]):
+        if pd.isna(self.ema20[0]):
             return
         
         LoggerManager.Debug("app", strategy=f"backtrader", event=f"next", content=f">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
@@ -124,23 +135,23 @@ class GridStrategyBT(bt.Strategy):
         # 可以每天做一次统计
         # 如果是新的一天，使用开盘价更新网格核心区，并将当前未完成的平仓单转为历史订单
         date_str = self.datas[0].datetime.datetime(0).strftime('%Y-%m-%d')  # 当前 bar 的 datetime 对象
-        month = round(self.datas[0].datetime.date(0).month/6)
+        month = round(self.datas[0].datetime.date(0).month)
         if self.today != date_str:
             self.today = date_str
             
             self.runtimes = self.loop.run_until_complete(self.grid.rebalance(self.runtimes))
-            
-            # 统计每日的资金仓位变化
             self.days_total += 1
             if self.grid.not_today:
                 self.not_today_count += 1
+                
+            # 统计每日的资金仓位变化
             summy = self.grid.DailySummary(date_str)
             # 每个月显示一条数据
             if month != self.month:
                 self.month = month
                 params = summy.params
-                summy_str = f"Profit: {summy.profits:.2f}, Completed: {params.get('completed_count', 0)}, Pending: Buy({params.get('pending_buy_count', 0)}), Sell({params.get('pending_sell_count', 0)})"
-                self.log(f"{self.broker.get_value():>8.2f} Cash: {round(summy.cash, 2):>8.2f}, Pos: {summy.position:>3}, " + summy_str + f", {self.not_today_count}/{self.days_total}", level=1)
+                summy_str = f"Profit: {summy.profits:>8.2f}, Completed: {params.get('completed_count', 0):>4}, Pending: Buy({params.get('pending_buy_count', 0):>5}), Sell({params.get('pending_sell_count', 0):>5})"
+                self.log(f"{self.broker.get_value():>8.2f} Cash: {round(summy.cash, 2):>8.2f}, Pos: {summy.position:>5}, " + summy_str + f", {self.not_today_count:>4}/{self.days_total:>4}", level=1)
             LoggerManager.Debug("app", strategy=f"backtrader", event=f"next_open", content=f"<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
         
     # 当前bar的数据执行之后才会调用next()

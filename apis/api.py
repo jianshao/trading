@@ -180,3 +180,7 @@ class BaseAPI(ABC):
     @abstractmethod
     async def get_vxn(self, durationStr="5 D", barSizeSetting="1 day") -> float:
         pass
+    
+    @abstractmethod
+    async def get_adx(self, durationStr="5 D", barSizeSetting="1 day") -> float:
+        pass

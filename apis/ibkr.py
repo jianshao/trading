@@ -4,6 +4,7 @@ import datetime
 import sys
 import os
 from zoneinfo import ZoneInfo
+from common.adx import calc_adx
 import numpy as np
 from ib_insync.util import run
 from typing import Optional, Callable, Any, List, Dict, Coroutine
@@ -213,10 +214,13 @@ class IBapi(BaseAPI):
         """Creates and qualifies an IB Contract object for a stock."""
         if not self.isConnected(): return None
         
-        contract = Stock(symbol, exchange, currency, primaryExchange=primary_exchange)
-        if primary_exchange:
-            contract.primaryExchange = primary_exchange
-        
+        if symbol == "VXN":
+            contract = Index(symbol=symbol, exchange = "CBOE", currency = 'USD')
+        else:
+            contract = Stock(symbol=symbol, exchange = exchange, currency = "USD")
+            if primary_exchange:
+                contract.primaryExchange = primary_exchange
+
         try:
             qualified_contracts = await self.ib.reqContractDetailsAsync(contract)
             if qualified_contracts:
@@ -344,20 +348,12 @@ class IBapi(BaseAPI):
             # print(f"IBapi: Requesting historical data for {contract.symbol}: End={end_date_time or 'Now'}, Dur={duration_str}, Bar={bar_size_setting}")
             
             # Ensure contract is fully qualified if not already
-            # if symbol:
-            # contract = Stock(symbol=symbol, exchange = "SMART", currency = "USD")
-            # if symbol == "VXN":
-            #     contract = Index("VXN", "CBOE")
-            # qualified_contract = await self.get_contract_details(contract.symbol)
-            # if not qualified_contract:
-            #     print(f"IBapi: Could not qualify contract {contract.symbol} for historical data.")
-            #     return None
-            # contract_to_use = qualified_contract
+            qualified_contract = await self.get_contract_details(symbol)
+            if not qualified_contract:
+                print(f"IBapi: Could not qualify contract {symbol} for historical data.")
+                return None
+            contract_to_use = qualified_contract
 
-            if symbol == "VXN":
-                contract_to_use = Index("VXN", "CBOE")
-            else:
-                contract_to_use = Stock(symbol=symbol, exchange = "SMART", currency = "USD")
             bars: BarDataList = await self.ib.reqHistoricalDataAsync(
                     contract_to_use,
                     endDateTime=end_date_time,
@@ -656,8 +652,8 @@ class IBapi(BaseAPI):
         realtime_bars = await self.ib.reqHistoricalDataAsync(
             contract,
             endDateTime='',         # 空字符串代表“当前服务器时间”
-            durationStr='60 S',     # 只看过去 60 秒
-            barSizeSetting='1 min', # 1分钟 K 线
+            durationStr='10 min',     # 只看过去 60 秒
+            barSizeSetting='5 secs', # 1分钟 K 线
             whatToShow='TRADES',    # 真实的成交价
             useRTH=False,           # ✔️ 关键：包含盘前/盘后数据
             formatDate=1,
@@ -679,10 +675,10 @@ class IBapi(BaseAPI):
         daily_bars = await self.ib.reqHistoricalDataAsync(
             contract,
             endDateTime='',         # 截止到现在
-            durationStr='1 W',      # 向前找1周（为了跨过周末和长假）
+            durationStr='2 W',      # 向前找1周（为了跨过周末和长假）
             barSizeSetting='1 day', # 日 K 线
             whatToShow='TRADES',
-            useRTH=True,            # ✔️ 关键：只取正式交易时间的收盘价
+            useRTH=False,            # ✔️ 关键：只取正式交易时间的收盘价
             formatDate=1
         )
 
@@ -702,9 +698,6 @@ class IBapi(BaseAPI):
         # 构建合约
         contract = Stock(symbol, "SMART", "USD")
 
-        # 解析合约
-        # await ib.qualifyContractsAsync(contract)
-
         # 异步获取历史数据
         bars = await self.ib.reqHistoricalDataAsync(
             contract,
@@ -712,7 +705,7 @@ class IBapi(BaseAPI):
             durationStr=duration,
             barSizeSetting=bar_size,
             whatToShow="TRADES",
-            useRTH=False,
+            useRTH=True,
             formatDate=1
         )
 
@@ -790,3 +783,15 @@ class IBapi(BaseAPI):
 
         # vxn_df = util.df(vxn_bars)
         return vxn_bars.iloc[-1]["Close"]
+
+    async def get_adx(self, symbol, durationStr="5 D", barSizeSetting="1 day") -> float:
+        bars = await self.get_historical_data(
+            symbol,
+            duration_str="3 M",
+            bar_size_setting=barSizeSetting
+        )
+        if bars.empty:
+            return 0
+
+        adx_bars = calc_adx(bars)
+        return adx_bars.iloc[-1]["Close"]
