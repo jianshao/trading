@@ -81,9 +81,9 @@ class GridStrategy(Strategy):
             "total_cost": 13000,
             "skip": False,
             "data_file": "data/strategies/grid",
-            "ema_short_period": 12,
-            "ema_middle_period": 7,
-            "ema_long_period": 26,
+            "ema_short_period": 10,
+            "ema_middle_period": 20,
+            "ema_long_period": 50,
         }
         defaults.update(kwargs)
 

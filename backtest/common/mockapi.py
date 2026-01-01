@@ -296,5 +296,5 @@ class MockApi(BaseAPI):
         return bt_time
 
 
-    async def get_adx(self, durationStr="5 D", barSizeSetting="1 day") -> float:
+    async def get_adx(self, symbol, durationStr="5 D", barSizeSetting="1 day") -> float:
         return self.bt_api.adx[0]
