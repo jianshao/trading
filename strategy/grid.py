@@ -773,6 +773,8 @@ class GridStrategy(Strategy):
                 "last_rebalance": self.last_rebalance.isoformat()
             }
         }
+        if self.not_today:
+            data["runtimes"] = {}
         try:
             async with aiofiles.open(file_path, 'w') as f:
                 await f.write(json.dumps(data, indent=4))
@@ -819,8 +821,6 @@ class GridStrategy(Strategy):
     async def DoStop(self):
         self.is_running = False
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"stop", content=f"Stopping strategy {self.strategy_id}...")
-        if self.not_today:
-            return
         
         # 保存当前未完成的网格单元，然后取消所有订单
         await self._save_active_grid_cycles()
