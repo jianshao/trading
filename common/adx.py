@@ -4,9 +4,9 @@ import numpy as np
 def calc_adx(
     df: pd.DataFrame,
     period: int = 14,
-    high_col: str = "high",
-    low_col: str = "low",
-    close_col: str = "close"
+    high_col: str = "High",
+    low_col: str = "Low",
+    close_col: str = "Close"
 ) -> pd.DataFrame:
     """
     纯 pandas 实现 ADX（Welles Wilder 原始算法）

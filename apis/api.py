@@ -182,5 +182,5 @@ class BaseAPI(ABC):
         pass
     
     @abstractmethod
-    async def get_adx(self, symbol, durationStr="5 D", barSizeSetting="1 day") -> float:
+    async def get_adx(self, symbol, durationStr="1 M", barSizeSetting="1 day") -> float:
         pass

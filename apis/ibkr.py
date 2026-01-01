@@ -784,10 +784,11 @@ class IBapi(BaseAPI):
         # vxn_df = util.df(vxn_bars)
         return vxn_bars.iloc[-1]["Close"]
 
-    async def get_adx(self, symbol, durationStr="5 D", barSizeSetting="1 day") -> float:
+    async def get_adx(self, symbol, durationStr="1 M", barSizeSetting="1 day") -> float:
+        print(f"duration: `{durationStr}`")
         bars = await self.get_historical_data(
             symbol,
-            duration_str="3 M",
+            duration_str=durationStr,
             bar_size_setting=barSizeSetting
         )
         if bars.empty:
