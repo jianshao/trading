@@ -57,6 +57,10 @@ class GridStrategyEngine:
                 "symbol": "QQQ",
                 "unique_tag": 1,
                 "retention_fund_ratio": 0.2,
+                "skip": True,
+                "ema_short_period": 10,
+                "ema_middle_period": 20,
+                "ema_long_period": 50,
                 "total_cost": 13000
             }
 
