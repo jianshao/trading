@@ -288,7 +288,7 @@ class GridStrategy(Strategy):
         ema_short = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_short_period)
         ema_middle = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_middle_period)
         ema_long = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_long_period)
-        adx = await self.realtime_data_processor.get_adx()
+        adx = await self.realtime_data_processor.get_adx(self.symbol)
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"EMA: {ema_short}, {ema_middle}, {ema_long}, ADX:{adx}")
     
         # if self.adx[0] > self.p.adx_threshold and self.ma5[0] < self.ma7[0] and self.macd.macd < self.macd.signal:
