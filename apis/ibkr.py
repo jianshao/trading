@@ -785,14 +785,18 @@ class IBapi(BaseAPI):
         return vxn_bars.iloc[-1]["Close"]
 
     async def get_adx(self, symbol, durationStr="1 M", barSizeSetting="1 day") -> float:
-        print(f"duration: `{durationStr}`")
         bars = await self.get_historical_data(
-            symbol,
-            duration_str=durationStr,
-            bar_size_setting=barSizeSetting
+            symbol=symbol,
+            duration_str="2 M",
+            bar_size_setting=barSizeSetting, # Daily bars for daily ATR
+            what_to_show='TRADES',
+            use_rth=True,
+            format_date=1 # YYYYMMDD HH:MM:SS
         )
+        print(f"duration: `{durationStr}` {len(bars)}")
         if bars.empty:
             return 0
 
-        adx_bars = calc_adx(bars)
-        return adx_bars.iloc[-1]["ADX"]
+        # 转换为 DataFrame
+        adx_bars = calc_adx(bars, 14)
+        return adx_bars.iloc[-1]["ADX_14"]

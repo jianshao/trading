@@ -2,81 +2,79 @@ import pandas as pd
 import numpy as np
 
 def calc_adx(
-    df: pd.DataFrame,
-    period: int = 14,
-    high_col: str = "High",
-    low_col: str = "Low",
-    close_col: str = "Close"
+    data_df: pd.DataFrame,
+    period: int = 14
 ) -> pd.DataFrame:
     """
-    纯 pandas 实现 ADX（Welles Wilder 原始算法）
-    返回 df 副本，包含：
-      +DI, -DI, DX, ADX
+    Manually calculates the Average Directional Index (ADX), +DI, and -DI
+    for a given DataFrame, without using pandas_ta.
+
+    Args:
+        data_df (pd.DataFrame): DataFrame with 'High', 'Low', 'Close' columns.
+                                Index should be a DatetimeIndex.
+        period (int): The period over which to calculate the ADX. Default is 14.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing 'ADX_p', 'DMP_p', 'DMN_p' columns
+                      (where p is the period), or None if calculation fails.
     """
+    if not isinstance(data_df, pd.DataFrame) or data_df.empty:
+        print("calculate_adx_manual: Input DataFrame is empty or invalid.")
+        return None
+        
+    required_cols = ['High', 'Low', 'Close']
+    if not all(col in data_df.columns for col in required_cols):
+        print(f"calculate_adx_manual: DataFrame must contain {required_cols} columns.")
+        return None
+    
+    df = data_df.copy() # Work on a copy to avoid modifying the original DataFrame
 
-    df = df.copy()
+    # 1. Calculate Directional Movement (+DM, -DM) and True Range (TR)
+    df['High-Low'] = df['High'] - df['Low']
+    df['High-PrevClose'] = abs(df['High'] - df['Close'].shift(1))
+    df['Low-PrevClose'] = abs(df['Low'] - df['Close'].shift(1))
 
-    high = df[high_col]
-    low = df[low_col]
-    close = df[close_col]
+    df['TR'] = df[['High-Low', 'High-PrevClose', 'Low-PrevClose']].max(axis=1, skipna=True)
 
-    # ---------- 1. 计算 True Range ----------
-    prev_close = close.shift(1)
+    df['UpMove'] = df['High'] - df['High'].shift(1)
+    df['DownMove'] = df['Low'].shift(1) - df['Low']
 
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs()
-    ], axis=1).max(axis=1)
+    df['+DM'] = np.where((df['UpMove'] > df['DownMove']) & (df['UpMove'] > 0), df['UpMove'], 0)
+    df['-DM'] = np.where((df['DownMove'] > df['UpMove']) & (df['DownMove'] > 0), df['DownMove'], 0)
 
-    # ---------- 2. 计算 Directional Movement ----------
-    up_move = high.diff()
-    down_move = -low.diff()
+    # 2. Calculate Smoothed +DM, -DM, and TR using Wilder's Smoothing
+    # Wilder's Smoothing is equivalent to an EMA with alpha = 1 / period.
+    # We can use pandas' ewm method with alpha=1/period and adjust=False.
+    alpha = 1 / period
+    
+    # Calculate initial SMA for the first 'period' values
+    df['+DI_smooth'] = df['+DM'].rolling(window=period).sum()
+    df['-DI_smooth'] = df['-DM'].rolling(window=period).sum()
+    df['TR_smooth'] = df['TR'].rolling(window=period).sum()
 
-    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    # Apply Wilder's smoothing for subsequent values
+    # For a more direct approach without complex slicing, we can use a loop,
+    # or use ewm with some adjustments. Let's use the direct ewm approach.
+    
+    # Note: ewm(alpha=1/N, adjust=False) is Wilder's RMA (Relative Moving Average)
+    df['+DM_smooth'] = df['+DM'].ewm(alpha=alpha, adjust=False).mean()
+    df['-DM_smooth'] = df['-DM'].ewm(alpha=alpha, adjust=False).mean()
+    df['TR_smooth'] = df['TR'].ewm(alpha=alpha, adjust=False).mean()
 
-    plus_dm = pd.Series(plus_dm, index=df.index)
-    minus_dm = pd.Series(minus_dm, index=df.index)
+    # 3. Calculate +DI and -DI
+    df[f'DMP_{period}'] = (df['+DM_smooth'] / df['TR_smooth']) * 100
+    df[f'DMN_{period}'] = (df['-DM_smooth'] / df['TR_smooth']) * 100
 
-    # ---------- 3. Wilder 平滑 ----------
-    def wilder_smooth(series, period):
-        """
-        Wilder smoothing:
-        S_t = S_{t-1} - (S_{t-1} / period) + value_t
-        """
-        result = series.copy()
-        result.iloc[:period] = np.nan
+    # 4. Calculate the Directional Index (DX)
+    df['DX'] = (abs(df[f'DMP_{period}'] - df[f'DMN_{period}']) / abs(df[f'DMP_{period}'] + df[f'DMN_{period}'])) * 100
 
-        initial = series.iloc[1:period+1].sum()
-        result.iloc[period] = initial
+    # 5. Calculate the Average Directional Index (ADX) by smoothing DX
+    df[f'ADX_{period}'] = df['DX'].ewm(alpha=alpha, adjust=False).mean()
 
-        for i in range(period + 1, len(series)):
-            result.iloc[i] = (
-                result.iloc[i - 1]
-                - (result.iloc[i - 1] / period)
-                + series.iloc[i]
-            )
-        return result
-
-    tr_smooth = wilder_smooth(tr, period)
-    plus_dm_smooth = wilder_smooth(plus_dm, period)
-    minus_dm_smooth = wilder_smooth(minus_dm, period)
-
-    # ---------- 4. 计算 DI ----------
-    plus_di = 100 * (plus_dm_smooth / tr_smooth)
-    minus_di = 100 * (minus_dm_smooth / tr_smooth)
-
-    # ---------- 5. DX ----------
-    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
-
-    # ---------- 6. ADX ----------
-    adx = wilder_smooth(dx, period)
-
-    # ---------- 7. 写回 ----------
-    df["+DI"] = plus_di
-    df["-DI"] = minus_di
-    df["DX"] = dx
-    df["ADX"] = adx
-
-    return df
+    # Prepare final result DataFrame
+    result_df = df[[f'ADX_{period}', f'DMP_{period}', f'DMN_{period}']].copy()
+    
+    # The first (period * 2 - 1) or so values will be NaN due to the multiple layers of smoothing and shifting.
+    # This is normal.
+    
+    return result_df
