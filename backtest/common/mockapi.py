@@ -254,14 +254,20 @@ class MockApi(BaseAPI):
         # 根据周期返回对应的 Backtrader 指标值
         if ema_period == 20:
             return self.bt_api.ema20[0]
-        elif ema_period == 12:
-            return self.bt_api.ema12[0]
         elif ema_period == 26:
             return self.bt_api.ema26[0]
         elif ema_period == 5:
             return self.bt_api.ema5[0]
+        elif ema_period == 6:
+            return self.bt_api.ema6[0]
         elif ema_period == 7:
             return self.bt_api.ema7[0]
+        elif ema_period == 8:
+            return self.bt_api.ema8[0]
+        elif ema_period == 12:
+            return self.bt_api.ema12[0]
+        elif ema_period == 14:
+            return self.bt_api.ema14[0]
         else:
             # 如果有其他周期，需要在这里扩展，或者用 dict 映射
             return 0

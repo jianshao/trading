@@ -24,15 +24,15 @@ class DowntrendBand(bt.Indicator):
 
     def __init__(self):
         self.ma5 = bt.indicators.SMA(self.data.close, period=5)
-        self.ma7 = bt.indicators.SMA(self.data.close, period=7)
+        self.ma7 = bt.indicators.SMA(self.data.close, period=6)
         self.ma10 = bt.indicators.SMA(self.data.close, period=10)
-        self.ma20 = bt.indicators.SMA(self.data.close, period=20)
+        self.ma20 = bt.indicators.SMA(self.data.close, period=14)
         self.macd = bt.indicators.MACD(self.data)
         self.adx = bt.indicators.ADX(self.data, period=self.p.adx_period)
 
     def next(self):
         is_downtrend = False
-        if self.adx[0] > self.p.adx_threshold and self.ma5[0] < self.ma7[0] and self.macd.macd < self.macd.signal:
+        if self.adx[0] > self.p.adx_threshold and self.ma5[0] < self.ma7[0]:
             is_downtrend = True
         # if self.macd.macd < self.macd.signal:
         #     is_downtrend = True

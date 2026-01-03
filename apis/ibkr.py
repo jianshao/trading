@@ -795,4 +795,4 @@ class IBapi(BaseAPI):
             return 0
 
         adx_bars = calc_adx(bars)
-        return adx_bars.iloc[-1]["Close"]
+        return adx_bars.iloc[-1]["ADX"]

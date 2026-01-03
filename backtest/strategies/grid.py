@@ -49,8 +49,11 @@ class GridStrategyBT(bt.Strategy):
         self.atr  = bt.indicators.ATR(self.datas[1], period=14)
         self.adx = bt.indicators.ADX(self.datas[1], period=14)
         self.ema5 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=self.p.ema_short_period)
+        self.ema6 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=6)
         self.ema7 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=self.p.ema_middle_period)
+        self.ema8 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=8)
         self.ema12 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=12)
+        self.ema14 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=14)
         self.ema20 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=self.p.ema_long_period)
         self.ema26 = bt.indicators.ExponentialMovingAverage(self.datas[1], period=26)
         self.macd = bt.indicators.MACDHisto(self.datas[1], 
@@ -135,7 +138,7 @@ class GridStrategyBT(bt.Strategy):
         # 可以每天做一次统计
         # 如果是新的一天，使用开盘价更新网格核心区，并将当前未完成的平仓单转为历史订单
         date_str = self.datas[0].datetime.datetime(0).strftime('%Y-%m-%d')  # 当前 bar 的 datetime 对象
-        month = round(self.datas[0].datetime.date(0).month)
+        month = round(self.datas[0].datetime.date(0).month/6)
         if self.today != date_str:
             self.today = date_str
             
