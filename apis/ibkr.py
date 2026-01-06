@@ -4,7 +4,7 @@ import datetime
 import sys
 import os
 from zoneinfo import ZoneInfo
-from common.adx import calc_adx
+from common.adx import calculate_adx_with_talib, get_backtrader_indicators
 import numpy as np
 from ib_insync.util import run
 from typing import Optional, Callable, Any, List, Dict, Coroutine
@@ -787,16 +787,19 @@ class IBapi(BaseAPI):
     async def get_adx(self, symbol, durationStr="1 M", barSizeSetting="1 day") -> float:
         bars = await self.get_historical_data(
             symbol=symbol,
-            duration_str="2 M",
+            duration_str=durationStr,
             bar_size_setting=barSizeSetting, # Daily bars for daily ATR
-            what_to_show='TRADES',
-            use_rth=True,
-            format_date=1 # YYYYMMDD HH:MM:SS
         )
         print(f"duration: `{durationStr}` {len(bars)}")
         if bars.empty:
             return 0
 
+        import backtrader as bt
+        adx_bars = get_backtrader_indicators(
+            bars,
+            bt.indicators.ADX,
+            period=14
+        )
         # 转换为 DataFrame
-        adx_bars = calc_adx(bars, 14)
-        return adx_bars.iloc[-1]["ADX_14"]
+        # adx_bars = calculate_adx_with_talib(bars, 14)
+        return adx_bars['adx'].iloc[-1]

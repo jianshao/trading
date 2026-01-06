@@ -288,7 +288,7 @@ class GridStrategy(Strategy):
         ema_short = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_short_period)
         ema_middle = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_middle_period)
         ema_long = await self.realtime_data_processor.get_ema(self.symbol, ema_period=self.ema_long_period)
-        adx = await self.realtime_data_processor.get_adx(self.symbol, durationStr="20 D", barSizeSetting="1 day")
+        adx = await self.realtime_data_processor.get_adx(self.symbol, durationStr="2 M", barSizeSetting="1 day")
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"EMA: {ema_short}, {ema_middle}, {ema_long}, ADX:{adx}")
     
         # if self.adx[0] > self.p.adx_threshold and self.ma5[0] < self.ma7[0] and self.macd.macd < self.macd.signal:
@@ -754,7 +754,7 @@ class GridStrategy(Strategy):
 
         self.profit_logs.append({
             "start_time": self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "end_time": self.realtime_data_processor.get_current_time().strftime("%Y-%m-%d %H:%M:%S"),
+            "end_time": self.end_time.strftime("%Y-%m-%d %H:%M:%S"),
             "position": [round(self.init_position, 2), round(self.position, 2)],
             "cash": [round(self.init_cash, 2), round(self.cash + self.net_profit, 2)],
             "completed_count": self.completed_count,
@@ -765,16 +765,15 @@ class GridStrategy(Strategy):
             "profits": self.profit_logs,
             "close_units": [unit.to_dict() for unit in self.close_units.values()],
             "open_orders": [order.to_dict() for order in self.open_orders.values()],
-            "runtimes": {
+        }
+        if not self.not_today:
+            data["runtimes"] = {
                 "total_cost": self.total_cost,
                 "price_range": self.price_range,
                 "grid_spread": self.grid_spread,
                 "cost_per_grid": self.cost_per_grid,
-                "last_rebalance": self.last_rebalance.isoformat()
+                "last_rebalance": self.last_rebalance.isoformat() if self.last_rebalance else ""
             }
-        }
-        if self.not_today:
-            data["runtimes"] = {}
         try:
             async with aiofiles.open(file_path, 'w') as f:
                 await f.write(json.dumps(data, indent=4))
@@ -822,6 +821,7 @@ class GridStrategy(Strategy):
         self.is_running = False
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"stop", content=f"Stopping strategy {self.strategy_id}...")
         
+        self.end_time = self.realtime_data_processor.get_current_time()
         # 保存当前未完成的网格单元，然后取消所有订单
         await self._save_active_grid_cycles()
         await self._cancel_active_orders()
@@ -832,7 +832,6 @@ class GridStrategy(Strategy):
         except asyncio.TimeoutError:
             LoggerManager.Error("app", content="Timeout waiting for order cancellation")
         
-        self.end_time = self.realtime_data_processor.get_current_time()
         return
 
     # 每日总结
