@@ -558,7 +558,7 @@ class GridStrategy(Strategy):
             self.pending_buy_cost = round(self.pending_buy_cost - abs(order.done_shares * order.done_price), 2)
             LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="order_deal", content=f'BUY Order EXECUTED, Lmt Price: {order.lmt_price:.2f}, Done Price: {order.done_price} Qty: {order.done_shares:.0f} Id: {order.order_id}')
         else:
-            await self.clear_stop_buy()
+            # await self.clear_stop_buy()
             self.position -= abs(order.done_shares)
             self.cash += abs(order.done_price*order.done_shares)
             
@@ -752,13 +752,15 @@ class GridStrategy(Strategy):
         file_path = self.data_file
         # 把pending orders中未完成的部分也写入到文件
 
+        last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
         self.profit_logs.append({
             "start_time": self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
             "end_time": self.end_time.strftime("%Y-%m-%d %H:%M:%S"),
             "position": [round(self.init_position, 2), round(self.position, 2)],
-            "cash": [round(self.init_cash, 2), round(self.cash + self.net_profit, 2)],
+            "cash": [round(self.init_cash, 2), round(self.cash, 2)],
             "completed_count": self.completed_count,
             "profit": round(self.net_profit, 2),
+            "total": round(self.cash + self.position * last_price, 2)
         })
         self.profit_logs = self.reorganize_profits()
         data = {
