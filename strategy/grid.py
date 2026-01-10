@@ -26,6 +26,7 @@ from common.logger_manager import LoggerManager
 
 
 CYCLE_DAYS_DEFAULT = 21
+SAFETY_MINUTES_DEFAULT = 30 # 安全时间缓冲，避免策略启动慢导致退出。
 
 @dataclass
 class GridUnit:
@@ -201,7 +202,7 @@ class GridStrategy(Strategy):
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="reflesh_config", content=f"Curr_time: {current_time}, runtime: {runtime}")
         if runtime:
             last_rebalance = utils.to_datetime(runtime.get('last_rebalance', ""))
-            if last_rebalance and current_time - last_rebalance < timedelta(days=CYCLE_DAYS_DEFAULT):
+            if last_rebalance and current_time - last_rebalance < timedelta(days=CYCLE_DAYS_DEFAULT) - timedelta(minutes=SAFETY_MINUTES_DEFAULT):
                 LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance_skip", content=f"No rebalance needed. Last rebalance at {last_rebalance}, current time {current_time}.")
                 return data
         
@@ -424,7 +425,13 @@ class GridStrategy(Strategy):
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="grid_buy", content=f"Place BUY order, Price: {price:.2f}, Qty: {size}")
         cost = abs(round(price * size, 2))
         if force is False:
+            # 有可能是在开盘后启动，等待策略启动完成
+            max_waiting_time = 60
+            while max_waiting_time > 0 and not self.is_running:
+                await asyncio.sleep(1)
+                max_waiting_time -= 1
             if not self.is_running:
+                LoggerManager.Error("app", event="grid_buy_failed", strategy=f"{self.strategy_id}", content=f"Buying failed due to not running.")
                 return None
             
             if self.stop_buy:
@@ -452,7 +459,13 @@ class GridStrategy(Strategy):
     async def grid_sell(self, price: float, size: float, order_ref: str = "", force: bool = False) -> Optional[GridOrder]:
         LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="grid_sell", content=f"Place SELL order, Price: {price:.2f}, Qty: {size}")
         if force is False:
+            # 有可能是在开盘后启动，等待策略启动完成
+            max_waiting_time = 60
+            while max_waiting_time > 0 and not self.is_running:
+                await asyncio.sleep(1)
+                max_waiting_time -= 1
             if not self.is_running:
+                LoggerManager.Error("app", event="grid_sell_failed", strategy=f"{self.strategy_id}", content=f"Selling failed due to not running.")
                 return None
             
             if self.position - self.pending_sell_count < size:
