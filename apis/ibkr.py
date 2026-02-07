@@ -608,12 +608,12 @@ class IBapi(BaseAPI):
         
         contract = Stock(symbol=symbol, exchange = "SMART", currency = "USD")
 
-        days_to_fetch = max(atr_period * 2, hist_duration) # Ensure enough data
+        days_to_fetch = max(atr_period + 2, hist_duration) # Ensure enough data
         adjusted_duration_str = f"{days_to_fetch} D"
 
         historical_df = await self.get_historical_data(
             symbol=symbol,
-            duration_str=adjusted_duration_str,
+            # duration_str=adjusted_duration_str,
             bar_size_setting=hist_bar_size, # Daily bars for daily ATR
             what_to_show='TRADES',
             use_rth=True,

@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional
 import aiofiles
 
 from common import utils
+from data import config
 
 if __name__ == '__main__': # Allow running/importing from different locations
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -79,12 +80,13 @@ class GridStrategy(Strategy):
             "symbol": "QQQ",
             "unique_tag": 1,
             "retention_fund_ratio": 0.2,
-            "total_cost": 13000,
-            "skip": False,
-            "data_file": "data/strategies/grid",
-            "ema_short_period": 10,
-            "ema_middle_period": 20,
-            "ema_long_period": 50,
+            "total_cost": 10000,
+            "data_file": "data/strategies",
+            "ema_short_period": 1,
+            "ema_middle_period": 1,
+            "ema_long_period": 1,
+            "grid_count": 10,
+            "build_position_ratio": 0.1
         }
         defaults.update(kwargs)
 
@@ -125,7 +127,7 @@ class GridStrategy(Strategy):
         self.is_running = False
         self.stop_buy = False
         self.lock = asyncio.Lock()
-        self.price_range = []
+        self.price_range = [0, 0]
         self.grid_spread = 1
         self.cost_per_grid = 1000
         
@@ -181,19 +183,17 @@ class GridStrategy(Strategy):
     
     
     async def reflesh_grid_params(self, last_price: float):
-        coifcients = {
-            "TQQQ": 1.2,
-            "NLY": 1.1,
-            "QQQ": 1.15
-        }
+        symbol_conf = config.config_for_symbol.get(self.symbol, {})
         atr = await self.realtime_data_processor.get_atr(self.symbol)
-        re = ATRRangeEstimator(k=coifcients.get(self.symbol, 1.1))
-        range = re.predict(last_price, atr, 14)
-        upper = range.get("upper", 0)
-        lower = range.get("lower", 0)
+        LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="reflesh_grid_params", content=f"Refleshing grid params. Last Price: {last_price}, ATR: {atr}")
+        re = ATRRangeEstimator(k=symbol_conf.get("coefficient", 1))
+        range = re.predict(last_price, atr, symbol_conf.get("period", 14))
+        width = range.get("width", 0)
+        
+        lower = last_price - (1/self.self.build_position_ratio - 1) * width
+        upper = last_price + width
 
-        grid_count = 20
-        return [lower, upper], grid_count
+        return [round(lower, 2), round(upper, 2)]
         
     async def reflesh_config(self, data: Dict[str, Any], last_price: float) -> Dict[str, Any]:
         # 每双周做一次配置更新，包括网格价格上下限、单个成本
@@ -208,30 +208,31 @@ class GridStrategy(Strategy):
         
         # --- 开始执行新周期重置 ---
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="rebalance", content=f"Rebalance at current time {current_time}.")
-        price_range, grid_count = await self.reflesh_grid_params(last_price)
+        price_range = await self.reflesh_grid_params(last_price)
         
         # 新周期开启时先建50%底仓
         await self._cancel_active_orders()
-        await self.build_base_position(last_price)
+        await self.build_base_position(last_price, self.build_position_ratio)
         
         return {
             "runtimes": {
-                "total_cost": round(self.cash + self.position * last_price),
-                "grid_spread": round((price_range[1]-price_range[0]) / grid_count, 2),
+                "total_cost": round(self.cash + self.position * last_price, 2),
+                "grid_spread": round((price_range[1]-price_range[0]) / self.grid_count, 2),
                 "price_range": price_range,
-                "cost_per_grid": round(self.total_cost / grid_count, 2),
+                "cost_per_grid": round(self.total_cost / self.grid_count, 2),
                 "last_rebalance": current_time,
             }
         }
     
-    async def build_base_position(self, last_price: float):
+    async def build_base_position(self, last_price: float, ratio: float):
         order = None
         # 开启新周期建立50%底仓
-        target_value = self.total_cost * 0.5
+        target_value = self.total_cost * ratio
         # 计算当前持仓市值 (包含之前周期被套住的持仓)
         diff_value = max(target_value - self.position * last_price, 0)
         quantity_to_buy = max(round(diff_value / last_price), 1)
-        buy_price = round(last_price * 1.02, 2)
+        buy_price = round(last_price * 1.01, 2)
+        quantity_to_buy = max(round(diff_value / buy_price) - 1, 1)
         content=f"Building base position. Target Value: {target_value}, Diff Value: {diff_value}, Buying Qty: {quantity_to_buy} at Price: {last_price}"
         LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="build_base_position", content=content)
         order = await self.grid_buy(buy_price, quantity_to_buy, order_ref="BASE_POSITION_BUILD", force=True)
@@ -245,7 +246,7 @@ class GridStrategy(Strategy):
     async def rebalance(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """每双周重新均衡，生成新的价格上下限和中线"""
         last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
-        if not await self.is_grid_friendly_day():
+        if not await self.is_grid_friendly_day(last_price):
             self.not_today = True
             # 当日行情不适合运行
             await self.clear_all_position(last_price)
@@ -273,6 +274,7 @@ class GridStrategy(Strategy):
         
     async def is_grid_friendly_day(
         self,
+        last_price: float,
         hist_limit: float = 0.8,
         hist_expand_ratio: float = 1.4,
         dif_limit: float = 2.0,
@@ -299,8 +301,11 @@ class GridStrategy(Strategy):
         # if self.ma5[0] < self.ma20[0]:
         #     is_downtrend = True
             
+        return ema_short > ema_middle
         if adx > 30 and ema_short < ema_middle:
             return False
+        if ema_short > ema_middle:
+            return True
         if ema_short < ema_long:
             LoggerManager.Info("app", strategy=f"{self.strategy_id}", event=f"daily_check", content=f"skip because of EMA: {ema_short} < {ema_long} ADX({adx})")
             return False
@@ -449,7 +454,7 @@ class GridStrategy(Strategy):
         
         order = await self.om.place_order(self.symbol, "BUY", size, price, callback=self.update_order_status, tif="GTC", order_ref=order_ref)
         if order:
-            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="INCREASE", content=f"Place BUY order, OrderId: {order.order_id} Price: {price:.2f}, Qty: {size}")
+            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="INCREASE", content=f"Place BUY order, OrderId: {order.order_id} Price: {price:.2f}, Qty: {size}")
             self.pending_buy_count += abs(size)
             self.pending_buy_cost = round(self.pending_buy_cost + cost, 2)
         else:
@@ -577,7 +582,7 @@ class GridStrategy(Strategy):
             
             self.pending_sell_count -= abs(order.done_shares)
             self.pending_sell_cost = round(self.pending_sell_cost - abs(order.done_shares * order.done_price), 2)
-            LoggerManager.Info("app", strategy=f"{self.strategy_id}", event="order_deal", content=f'SELL Order EXECUTED, LmtPrice: {order.lmt_price} DonePrice: {order.done_price:.2f}, Qty: {order.done_shares:.0f} Id: {order.order_id}')
+            LoggerManager.Debug("app", strategy=f"{self.strategy_id}", event="order_deal", content=f'SELL Order EXECUTED, LmtPrice: {order.lmt_price} DonePrice: {order.done_price:.2f}, Qty: {order.done_shares:.0f} Id: {order.order_id}')
 
 
         # 如果是初始建仓单成交，触发初始订单提交
@@ -763,9 +768,15 @@ class GridStrategy(Strategy):
 
     async def _save_active_grid_cycles(self):
         file_path = self.data_file
-        # 把pending orders中未完成的部分也写入到文件
 
-        last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
+        # 退出时有可能客户端已经无法建立连接（如周五闭盘之后系统维护），兼容获取不到数据的情况。
+        try:
+            last_price = await self.realtime_data_processor.get_latest_price(self.symbol)
+        except Exception as e:
+            LoggerManager.Error("app", strategy=f"{self.strategy_id}", event=f"stop", content=f"Get last price for {self.strategy_id}: {e}")
+            last_price = 0
+            
+        # 把pending orders中未完成的部分也写入到文件
         self.profit_logs.append({
             "start_time": self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
             "end_time": self.end_time.strftime("%Y-%m-%d %H:%M:%S"),

@@ -168,8 +168,8 @@ async def main():
         LoggerManager.Info("app", "init", content=f"系统已启动并运行中。按 Ctrl+C 退出。")
         
         now = datetime.now()
-        # 构造"明天早上7点30分"的 datetime 对象
-        next_day_5am = datetime.combine(now.date() + timedelta(days=1), datetime.min.time()) + timedelta(hours=7, minutes=20)
+        # 构造"明天早上5点30分"的 datetime 对象
+        next_day_5am = datetime.combine(now.date() + timedelta(days=1), datetime.min.time()) + timedelta(hours=5, minutes=20)
         # 计算时间差
         delta = (next_day_5am - now).seconds
         # delta = 120
